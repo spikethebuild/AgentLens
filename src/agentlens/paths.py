@@ -52,10 +52,24 @@ def claude_settings_path() -> Path:
 
 
 def ensure_dir(path: Path) -> Path:
-    """Create ``path`` (and parents) with mode 0700, tightening an existing dir."""
-    path.mkdir(parents=True, exist_ok=True, mode=DIR_MODE)
+    """Create ``path`` with mode 0700.
+
+    ``mkdir(parents=True)`` applies ``mode`` only to the leaf, so every
+    directory from AGENTLENS_HOME down to ``path`` is created and tightened
+    explicitly. Directories above AGENTLENS_HOME are created with defaults
+    and never chmod-ed.
+    """
+    root = home()
     try:
-        os.chmod(path, DIR_MODE)
-    except OSError:
-        pass
+        rel = path.relative_to(root)
+        chain = [root] + [root.joinpath(*rel.parts[: i + 1]) for i in range(len(rel.parts))]
+    except ValueError:
+        chain = [path]
+    chain[0].parent.mkdir(parents=True, exist_ok=True)
+    for d in chain:
+        d.mkdir(exist_ok=True, mode=DIR_MODE)
+        try:
+            os.chmod(d, DIR_MODE)
+        except OSError:
+            pass
     return path
