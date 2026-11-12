@@ -43,6 +43,11 @@ EVENT_MAP: dict[str, tuple[Category, str, str | None]] = {
     "Stop": (Category.SESSION, "turn.stop", None),
     "StopFailure": (Category.ERROR, "turn.failure", "failed"),
     "PreCompact": (Category.SESSION, "session.compact", None),
+    # cache-relevant events (verified against the hooks docs 2026-11-12)
+    "PostCompact": (Category.SESSION, "session.compacted", None),
+    "PostModelSwitch": (Category.SESSION, "model.switch", None),
+    "InstructionsLoaded": (Category.SESSION, "instructions.loaded", None),
+    "ConfigChange": (Category.SESSION, "config.change", None),
 }
 
 # The hook events `agentlens install` registers.
@@ -66,6 +71,28 @@ def _int(v: Any) -> int | None:
     if isinstance(v, float) and v.is_integer():
         return int(v)
     return None
+
+
+def _num(v: Any) -> float | None:
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return float(v)
+
+
+def _bool(v: Any) -> bool | None:
+    return v if isinstance(v, bool) else None
+
+
+def _file_size(path: str | None) -> dict[str, int] | None:
+    """Bytes and line count of an instruction file. The content is never kept."""
+    if not path:
+        return None
+    try:
+        with open(path, "rb") as fh:
+            blob = fh.read(4 * 1024 * 1024)
+    except OSError:
+        return None
+    return {"bytes": len(blob), "lines": blob.count(b"\n") + (1 if blob and not blob.endswith(b"\n") else 0)}
 
 
 def _set(d: dict, key: str, value: Any) -> None:
@@ -263,6 +290,11 @@ def normalize(payload: Any, received_at: float, cfg: dict | None = None) -> list
         _set(data, "model", _str(payload.get("model")))
         if isinstance(payload.get("session_title"), str):
             data["session_title_chars"] = len(payload["session_title"])
+        # resume/fork only, Claude Code v2.1.251+
+        _set(data, "seconds_since_last_response", _num(payload.get("seconds_since_last_response")))
+        _set(data, "context_tokens", _int(payload.get("context_tokens")))
+        _set(data, "prompt_cache_likely_expired", _bool(payload.get("prompt_cache_likely_expired")))
+        _set(data, "estimated_cache_write_usd", _num(payload.get("estimated_cache_write_usd")))
 
     elif hook == "SessionEnd":
         _set(data, "end_reason", _str(payload.get("reason")))
@@ -319,6 +351,33 @@ def normalize(payload: Any, received_at: float, cfg: dict | None = None) -> list
         _set(data, "trigger", _str(payload.get("trigger")))
         if isinstance(payload.get("custom_instructions"), str):
             data["custom_instructions_chars"] = len(payload["custom_instructions"])
+
+    elif hook == "PostCompact":
+        _set(data, "trigger", _str(payload.get("trigger")))
+        if isinstance(payload.get("compact_summary"), str):  # length only, never the text
+            data["compact_summary_chars"] = len(payload["compact_summary"])
+
+    elif hook == "PostModelSwitch":
+        for key in ("from_model", "to_model", "requested_model", "cache_ttl", "pricing"):
+            _set(data, key, _str(payload.get(key)))
+        _set(data, "switch_source", _str(payload.get("source")))
+        _set(data, "context_tokens", _int(payload.get("context_tokens")))
+        _set(data, "prompt_cache_warm", _bool(payload.get("prompt_cache_warm")))
+        _set(data, "estimated_cache_write_usd", _num(payload.get("estimated_cache_write_usd")))
+
+    elif hook == "InstructionsLoaded":
+        path = _str(payload.get("file_path"))
+        _set(data, "file_path", path)
+        for key in ("memory_type", "load_reason", "trigger_file_path", "parent_file_path"):
+            _set(data, key, _str(payload.get(key)))
+        globs = payload.get("globs")
+        if isinstance(globs, list):
+            data["globs"] = [clean(g, 200) for g in globs[:20] if isinstance(g, str)]
+        _set(data, "file_size", _file_size(path))  # measured by AgentLens at load time
+
+    elif hook == "ConfigChange":
+        _set(data, "config_source", _str(payload.get("source")))
+        _set(data, "file_path", _str(payload.get("file_path")))
 
     mcp = payload.get("mcp_server")
     if isinstance(mcp, dict):

@@ -159,3 +159,15 @@ def test_fingerprint_is_keyed_and_stable():
     assert a != hashlib.sha256(b"yes").hexdigest()
     mode = stat.S_IMODE(os.stat(paths.salt_path()).st_mode)
     assert mode == 0o600
+
+
+def test_token_counts_are_kept_but_token_secrets_are_not():
+    from agentlens.redact import redact_obj
+
+    out = redact_obj({
+        "context_tokens": 182340, "cache_read_input_tokens": 5,
+        "token": 123456, "api_token": 99, "refresh_tokens": "abc-secret", "id_tokens": 1.5,
+    })
+    assert out["context_tokens"] == 182340 and out["cache_read_input_tokens"] == 5
+    for key in ("token", "api_token", "refresh_tokens", "id_tokens"):
+        assert out[key] == "[REDACTED:value]", key

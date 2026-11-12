@@ -51,6 +51,7 @@ def test_no_private_content_survives(fixture, name):
         "fixture-token-value",  # secret-named MCP arg
         "keep the cart details",  # compact instructions
         "find every place",  # subagent prompt
+        "SENTINEL-COMPACT-SUMMARY",  # PostCompact summary
     ]:
         assert forbidden not in out, (name, forbidden)
 
@@ -250,3 +251,73 @@ def test_wrong_types_ignored_not_crashing():
 def test_hook_events_registered_match_map():
     assert set(cc.HOOK_EVENTS) == set(cc.EVENT_MAP)
     assert "MessageDisplay" not in cc.HOOK_EVENTS
+
+
+# ------------------------------------------------- cache-relevant events
+
+
+def test_session_start_resume_cache_fields(fixture):
+    ev = norm(fixture, "session_start_resume")
+    assert ev.data["start_source"] == "resume"
+    assert ev.data["seconds_since_last_response"] == 5400
+    assert ev.data["context_tokens"] == 182340
+    assert ev.data["prompt_cache_likely_expired"] is True
+    assert ev.data["estimated_cache_write_usd"] == pytest.approx(1.1396)
+
+
+def test_session_start_without_resume_fields_leaves_them_out(fixture):
+    ev = norm(fixture, "session_start")
+    for key in ("seconds_since_last_response", "context_tokens", "prompt_cache_likely_expired"):
+        assert key not in ev.data
+
+
+def test_post_compact_keeps_only_summary_length(fixture):
+    ev = norm(fixture, "post_compact")
+    assert ev.type == "session.compacted"
+    assert ev.data["trigger"] == "manual"
+    assert ev.data["compact_summary_chars"] == len(fixture("post_compact")["compact_summary"])
+    assert "compact_summary" not in ev.data
+
+
+def test_post_model_switch(fixture):
+    ev = norm(fixture, "post_model_switch")
+    assert ev.type == "model.switch"
+    d = ev.data
+    assert (d["from_model"], d["to_model"], d["requested_model"]) == ("claude-sonnet-5", "claude-opus-5", "opus")
+    assert d["switch_source"] == "command"
+    assert d["context_tokens"] == 182340 and d["prompt_cache_warm"] is True
+    assert d["cache_ttl"] == "1h" and d["pricing"] == "catalog"
+    assert d["estimated_cache_write_usd"] == pytest.approx(1.1396)
+
+
+def test_model_switch_ignores_wrongly_typed_fields(fixture):
+    payload = fixture("post_model_switch")
+    payload.update(context_tokens="lots", prompt_cache_warm="yes", estimated_cache_write_usd=True)
+    (ev,) = cc.normalize(payload, TS, OFF)
+    for key in ("context_tokens", "prompt_cache_warm", "estimated_cache_write_usd"):
+        assert key not in ev.data
+
+
+def test_instructions_loaded_measures_size_without_content(fixture, tmp_path):
+    md = tmp_path / "CLAUDE.md"
+    md.write_text("# Rules\nSECRET-INSTRUCTION-BODY\nline three")
+    payload = fixture("instructions_loaded")
+    payload["file_path"] = str(md)
+    (ev,) = cc.normalize(payload, TS, OFF)
+    assert ev.type == "instructions.loaded"
+    assert ev.data["memory_type"] == "Project" and ev.data["load_reason"] == "session_start"
+    assert ev.data["file_size"] == {"bytes": md.stat().st_size, "lines": 3}
+    assert "SECRET-INSTRUCTION-BODY" not in dumped(ev)
+
+
+def test_instructions_loaded_missing_file_has_no_size(fixture):
+    ev = norm(fixture, "instructions_loaded")  # path does not exist here
+    assert "file_size" not in ev.data
+    assert ev.data["file_path"] == "/Users/my-project/CLAUDE.md"
+
+
+def test_config_change(fixture):
+    ev = norm(fixture, "config_change")
+    assert ev.type == "config.change"
+    assert ev.data["config_source"] == "project_settings"
+    assert ev.data["file_path"].endswith(".claude/settings.json")

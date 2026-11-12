@@ -103,6 +103,16 @@ def redact(text: str) -> str:
     return _ASSIGNMENT.sub(_assignment_sub, text)
 
 
+# Integer token *counts* (context_tokens, cache_read_input_tokens, ...) are usage
+# metrics, not credentials. Only ints under a key ending in "_tokens" are exempt;
+# strings and keys like "token" / "api_token" are still blanked.
+_TOKEN_COUNT_KEY = re.compile(r"_tokens$", re.IGNORECASE)
+
+
+def _is_token_count(k: str, v: Any) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool) and bool(_TOKEN_COUNT_KEY.search(k))
+
+
 def redact_obj(obj: Any) -> Any:
     """Recursively redact strings in a JSON-like structure; also blank secret-named keys."""
     if isinstance(obj, str):
@@ -110,7 +120,8 @@ def redact_obj(obj: Any) -> Any:
     if isinstance(obj, dict):
         out = {}
         for k, v in obj.items():
-            if isinstance(k, str) and _SECRET_KEY_NAME.search(k) and isinstance(v, (str, int, float)) and not isinstance(v, bool):
+            if (isinstance(k, str) and _SECRET_KEY_NAME.search(k) and not _is_token_count(k, v)
+                    and isinstance(v, (str, int, float)) and not isinstance(v, bool)):
                 out[k] = _tag("value")
             else:
                 out[k] = redact_obj(v)

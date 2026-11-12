@@ -1,0 +1,16 @@
+{
+  "session_id": "3f2a9c1e-5b7d-4e8a-9c0f-1a2b3c4d5e6f",
+  "transcript_path": "/Users/dev/.claude/projects/-Users-dev-shop/3f2a9c1e.jsonl",
+  "cwd": "/Users/dev/shop",
+  "hook_event_name": "PostModelSwitch",
+  "permission_mode": "default",
+  "from_model": "claude-sonnet-5",
+  "to_model": "claude-opus-5",
+  "requested_model": "opus",
+  "source": "command",
+  "context_tokens": 182340,
+  "prompt_cache_warm": true,
+  "cache_ttl": "1h",
+  "estimated_cache_write_usd": 1.1396,
+  "pricing": "catalog"
+}
