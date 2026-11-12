@@ -109,6 +109,7 @@ def test_benign_text_preserved():
         "open https://example.com/docs?page=2",
         "monkey=banana",
         "Exit code 1",
+        "./run --name build-secret-santa now",
         "npm run task-runner-configuration",
         "python desk-organizer-application.py",
     ]:

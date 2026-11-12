@@ -1,0 +1,18 @@
+{
+  "session_id": "3f2a9c1e-5b7d-4e8a-9c0f-1a2b3c4d5e6f",
+  "transcript_path": "/Users/dev/.claude/projects/-Users-dev-shop/3f2a9c1e.jsonl",
+  "cwd": "/Users/dev/shop",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "prompt_id": "8d1e4f2a-0b3c-4d5e-8f9a-0b1c2d3e4f5a",
+  "effort": {
+    "level": "high"
+  },
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "API_KEY=fixture-not-a-secret-123 pytest -q tests/test_checkout.py",
+    "description": "Run checkout tests",
+    "timeout": 120000
+  },
+  "tool_use_id": "toolu_01BashAAA"
+}

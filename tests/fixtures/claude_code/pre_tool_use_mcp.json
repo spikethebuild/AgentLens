@@ -1,0 +1,24 @@
+{
+  "session_id": "3f2a9c1e-5b7d-4e8a-9c0f-1a2b3c4d5e6f",
+  "transcript_path": "/Users/dev/.claude/projects/-Users-dev-shop/3f2a9c1e.jsonl",
+  "cwd": "/Users/dev/shop",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "prompt_id": "8d1e4f2a-0b3c-4d5e-8f9a-0b1c2d3e4f5a",
+  "tool_name": "mcp__github__create_issue",
+  "tool_input": {
+    "owner": "dev",
+    "repo": "shop",
+    "title": "Checkout bug",
+    "body": "Long body Long body Long body Long body Long body Long body Long body Long body Long body Long body Long body Long body Long body Long body Long body Long body Long body Long body Long body Long body Long body Long body Long body Long body Long body Long body Long body Long body Long body Long body Long body Long body Long body Long body Long body Long body Long body Long body Long body Long body ",
+    "labels": [
+      "bug"
+    ],
+    "token": "fixture-token-value"
+  },
+  "tool_use_id": "toolu_01McpAAA",
+  "mcp_server": {
+    "name": "github",
+    "source": "user"
+  }
+}

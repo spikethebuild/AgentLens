@@ -67,7 +67,7 @@ _PATTERNS: list[tuple[str, re.Pattern[str], str | Callable[[re.Match[str]], str]
     (
         "secret_flag",
         re.compile(
-            r"(?i)(--?[a-z0-9-]*(?:password|passwd|passphrase|token|secret|api-?key|access-?key)[a-z0-9-]*)"
+            r"(?i)(?<!\S)(--?[a-z0-9-]*(?:password|passwd|passphrase|token|secret|api-?key|access-?key)[a-z0-9-]*)"
             r"(\s+|=)(\"[^\"]*\"|'[^']*'|[^\s'\"]+)"
         ),
         lambda m: f"{m.group(1)}{m.group(2)}{_tag('flag')}",
