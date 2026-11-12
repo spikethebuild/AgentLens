@@ -4,7 +4,7 @@
 
 AgentLens is a local-first observability tool for AI coding agents. It records what Claude Code does (sessions, prompts, tool calls, failures, approvals, compactions, model switches, instruction files loaded) through Claude Code's official hooks and stores it in a local SQLite database. It makes **zero LLM calls**, never blocks the agent, and never stores file contents, prompt text or secrets.
 
-> Status: **v0.2 plugin packaging**. Recording, the CLI and a terminal dashboard work. The cache coach (v0.3: where prompt cache was rebuilt, why, and the fix) is next. Codex support is planned for v0.5.
+> Status: **v0.3 cache coach**. Recording (plugin or settings hooks), per-request token usage, the cache coach, the CLI and a terminal dashboard work. Codex support is planned for v0.5.
 
 ## Install
 
@@ -19,7 +19,10 @@ In Claude Code:
 /plugin install agentlens@agentlens
 ```
 
-Then run `/reload-plugins` or start a new session. Every session is recorded from then on. `/agentlens:status` prints a short health check.
+Then run `/reload-plugins` or start a new session. Every session is recorded from then on.
+
+- `/agentlens:cache` prints a five-line cache summary for the current session (it runs locally; its few lines are the only tokens it adds).
+- `/agentlens:status` prints a short health check.
 
 The plugin's hooks run `hooks/run.sh`, which finds Python 3.10+ (set `AGENTLENS_PYTHON` to choose one), runs the bundled collector and **always exits 0**. If no Python is found, it logs one line to `~/.agentlens/logs/agentlens.log` and does nothing else. Recorded data lives in `~/.agentlens` (or `AGENTLENS_HOME`), so it survives uninstalling or updating the plugin.
 
@@ -37,6 +40,37 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[tui]'   # or -e . for CLI o
 `install` adds hooks to `~/.claude/settings.json` (backup first, atomic write, idempotent). It records the absolute path of the interpreter you run it with; if you move that virtualenv, `agentlens status` reports it as `MISSING`.
 
 **Don't use both.** Claude Code runs plugin hooks and settings hooks side by side, so every event would fire twice. `agentlens install` refuses while the plugin is enabled (override with `--force`), and `agentlens status` warns if both are active. To switch to the plugin, run `agentlens uninstall`.
+
+## Cache coach
+
+`agentlens cache [session]` shows where a session's prompt cache was rebuilt, why, and how to avoid it. Without a session ID it uses the latest session in the current directory.
+
+Example output (from a test scenario, shortened):
+
+```
+Cache report · session 3f2a9c1e-…
+  cache hit ratio  82.4%            [calc]
+  cache read       4.10M tokens     [obs]
+  cache written    610k tokens      [obs]
+  cache TTL        5m (from cache-write split)  [calc]
+  cache misses     2, 103k tokens re-processed  [calc]
+
+Findings
+  ✗ 11-12 14:02:11 [clk]  Model switch claude-sonnet-5 → claude-opus-5
+      impact    re-processed 51k tokens [calc] (cache written 52k [obs]) · Claude Code estimate $1.14 [obs]
+      evidence  event 9c1f2e…(PostModelSwitch, command); request req_01… → req_01…
+      fix       Pick the model before you start, or switch right after /clear; each model has its own cache.
+```
+
+How it works:
+
+- **Usage** comes from the session transcript, read incrementally: AgentLens saves a byte offset per transcript and only reads what was appended, counting each API request once. It keeps token counts, model, request ID and timestamps, never message content. The transcript format is not a documented interface, so reports say so, and a missing field is shown as unavailable.
+- **A miss** uses the same definition as Claude Code's own status line: a request that read from cache more than 5% and at least 2,000 tokens less than the previous request left there. Only the main conversation is checked.
+- **Causes** come from recorded evidence between the two requests, in this order: compaction (`PreCompact`/`PostCompact`), model switch (`PostModelSwitch`, or the model changing in the transcript), idle gap beyond the cache TTL (TTL read from the 5-minute/1-hour write split), effort change (on models where it invalidates the cache). Anything else is reported as an **unexplained rebuild**. Hooks don't report tool or MCP changes, so AgentLens never claims that cause.
+- **Other rules:** resuming after the cache expired (Claude Code's own `prompt_cache_likely_expired`), three or more compactions, a cache-hit ratio under 70% over at least 10 requests, and instruction files (CLAUDE.md, rules) over 200 lines, with their token size estimated as bytes ÷ 4 and labelled `[est]`.
+- **Impact** is in tokens. Dollars appear only when Claude Code itself reported an estimate in a hook payload. Nothing is presented as "savings".
+
+`--requests` adds a per-request table. `--brief` prints at most five lines (what the skill shows).
 
 ## Dashboard
 
@@ -57,6 +91,7 @@ Every value carries the same `[obs]`/`[calc]`/`[est]`/`[clk]` labels as the CLI.
 | `agentlens status [--brief]` | Plugin and settings-hook installation, interpreter health, spool and database state, and warnings (double install, `disableAllHooks`). `--brief` prints at most four lines. |
 | `agentlens sessions [--limit N]` | Recent sessions: start, duration, state, prompts, tool calls, failures. |
 | `agentlens inspect <id-or-prefix> [--all]` | One session in detail: overview, tool calls, errors, timeline. |
+| `agentlens cache [session] [--brief] [--requests]` | Cache coach report: hit ratio, misses, causes with evidence, and fixes. |
 | `agentlens` / `agentlens dashboard` | Opens the terminal dashboard (needs the `tui` extra). Without a terminal, prints help. |
 | `agentlens ingest` | Moves spooled events into the database. Runs automatically before every read. |
 
