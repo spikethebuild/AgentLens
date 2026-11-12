@@ -104,16 +104,7 @@ def _complete(r: sqlite3.Row) -> bool:
     return all(r[k] is not None for k in ("input_tokens", "cache_read_tokens", "cache_write_tokens"))
 
 
-def fmt_tokens(n: int | None) -> str:
-    if n is None:
-        return render.UNAVAILABLE
-    if n >= 1_000_000:
-        return f"{n / 1_000_000:.2f}M"
-    if n >= 10_000:
-        return f"{n / 1000:.0f}k"
-    if n >= 1000:
-        return f"{n / 1000:.1f}k"
-    return str(n)
+fmt_tokens = render.fmt_tokens
 
 
 def _short(event_or_req_id: str) -> str:
@@ -335,21 +326,23 @@ def build_findings(session: sqlite3.Row, requests: list[sqlite3.Row], events: li
     return findings
 
 
+def usage_reason(conn: sqlite3.Connection, provider: str, sid: str) -> str:
+    """Why a session has no per-request usage."""
+    transcripts = [t for t in store.session_transcripts(conn, provider, sid) if not t["is_sidechain"]]
+    if not transcripts:
+        return "no transcript path recorded for this session"
+    if any(t["error"] for t in transcripts):
+        return next(t["error"] for t in transcripts if t["error"])
+    return "transcript has no usage entries (format may have changed in this Claude Code version)"
+
+
 def analyze(conn: sqlite3.Connection, session: sqlite3.Row) -> Report:
     provider, sid = session["provider"], session["session_id"]
     requests = store.session_requests(conn, provider, sid, sidechain=False)
     sub = len(store.session_requests(conn, provider, sid, sidechain=True))
     events = store.session_events(conn, provider, sid)
 
-    usage_status = ""
-    if not requests:
-        transcripts = [t for t in store.session_transcripts(conn, provider, sid) if not t["is_sidechain"]]
-        if not transcripts:
-            usage_status = "no transcript path recorded for this session"
-        elif any(t["error"] for t in transcripts):
-            usage_status = next(t["error"] for t in transcripts if t["error"])
-        else:
-            usage_status = "transcript has no usage entries (format may have changed in this Claude Code version)"
+    usage_status = "" if requests else usage_reason(conn, provider, sid)
 
     complete = [r for r in requests if _complete(r)]
     totals = {

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import shlex
 import sys
 import time
 from pathlib import Path
@@ -30,15 +29,55 @@ def _sync(quiet: bool = False) -> None:
 
 
 def _settings_arg(args) -> Path | None:
-    return Path(args.settings).expanduser() if getattr(args, "settings", None) else None
+    if getattr(args, "settings", None):
+        return Path(args.settings).expanduser()
+    scope = getattr(args, "scope", None)
+    if scope:
+        return paths.scope_settings_path(scope, Path.cwd())
+    return None
+
+
+def _git_ignored(path: Path) -> bool | None:
+    """True/False from `git check-ignore`; None outside a git repo or without git."""
+    import subprocess
+
+    try:
+        r = subprocess.run(["git", "-C", str(Path.cwd()), "check-ignore", "-q", str(path)],
+                           capture_output=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return {0: True, 1: False}.get(r.returncode)
+
+
+def _scope_notes(args, settings_path: Path) -> list[str]:
+    scope = getattr(args, "scope", None)
+    notes = []
+    if scope == "project":
+        notes.append(
+            "note: project settings are usually committed, and this hook names this machine's Python "
+            "interpreter. Teammates need the same path. Prefer --scope local, or the plugin."
+        )
+    if scope == "local" and _git_ignored(settings_path) is False:
+        notes.append(
+            f"note: {settings_path} is not ignored by git. Add `.claude/settings.local.json` to "
+            ".gitignore so it is not committed."
+        )
+    return notes
+
+
+def _print_change_header(change, verb: str) -> None:
+    path = render.short_path(str(change.settings_path), 80)
+    if change.dry_run:
+        print(f"Dry run: {verb} {path} would change as below. Nothing was written.")
+        print(change.diff, end="" if change.diff.endswith("\n") else "\n")
 
 
 # ----------------------------------------------------------------- commands
 
 
 def _plugin_on(args) -> bool:
-    settings = _settings_arg(args) or paths.claude_settings_path()
-    return plugin.plugin_enabled(settings, Path.cwd())
+    user = Path(args.settings).expanduser() if getattr(args, "settings", None) else paths.claude_settings_path()
+    return plugin.plugin_enabled(user, Path.cwd())
 
 
 def cmd_install(args) -> int:
@@ -50,8 +89,9 @@ def cmd_install(args) -> int:
             file=sys.stderr,
         )
         return 1
+    settings = _settings_arg(args)
     try:
-        change = installer.install(_settings_arg(args), python=args.python)
+        change = installer.install(settings, python=args.python, repair=args.repair, dry_run=args.dry_run)
     except installer.SettingsError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -59,19 +99,30 @@ def cmd_install(args) -> int:
     if not change.changed:
         print(f"AgentLens hooks already installed in {path} ({len(change.unchanged)} events). Nothing changed.")
         return 0
+    _print_change_header(change, "install into")
+    would = "Would add" if change.dry_run else "Added"
     if change.added:
-        print(f"Added AgentLens hooks for {len(change.added)} events to {path}: {', '.join(change.added)}")
+        print(f"{would} AgentLens hooks for {len(change.added)} events to {path}: {', '.join(change.added)}")
     if change.updated:
-        print(f"Updated the interpreter path for {len(change.updated)} events.")
+        print(f"{'Would update' if change.dry_run else 'Updated'} the interpreter path for {len(change.updated)} events.")
+    if change.repaired:
+        print(f"{'Would repair' if change.dry_run else 'Repaired'} AgentLens entries for {len(change.repaired)} "
+              f"events: {', '.join(change.repaired)}")
+    if change.removed:
+        print(f"{'Would remove' if change.dry_run else 'Removed'} AgentLens hooks from events it no longer uses: "
+              f"{', '.join(change.removed)}")
     if change.backup:
         print(f"Backup of the previous file: {render.short_path(str(change.backup), 100)}")
-    print("Hooks run async and never block Claude Code. New sessions are recorded automatically.")
+    for note in _scope_notes(args, change.settings_path):
+        print(note)
+    if not change.dry_run:
+        print("Hooks run async and never block Claude Code. Claude Code picks up the change without a restart.")
     return 0
 
 
 def cmd_uninstall(args) -> int:
     try:
-        change = installer.uninstall(_settings_arg(args))
+        change = installer.uninstall(_settings_arg(args), dry_run=args.dry_run)
     except installer.SettingsError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -79,19 +130,19 @@ def cmd_uninstall(args) -> int:
     if not change.changed:
         print(f"No AgentLens hooks found in {path}. Nothing changed.")
         return 0
-    print(f"Removed AgentLens hooks for {len(change.removed)} events from {path}.")
+    _print_change_header(change, "uninstall from")
+    print(f"{'Would remove' if change.dry_run else 'Removed'} AgentLens hooks for {len(change.removed)} events from {path}.")
     if change.backup:
         print(f"Backup of the previous file: {render.short_path(str(change.backup), 100)}")
-    print(f"Recorded data was kept in {render.short_path(str(paths.home()), 80)}.")
+    if not change.dry_run:
+        print(f"Recorded data was kept in {render.short_path(str(paths.home()), 80)}.")
     return 0
 
 
 def _interpreter_of(command: str) -> str | None:
-    try:
-        parts = shlex.split(command)
-    except ValueError:
-        return None
-    return parts[0] if parts else None
+    from agentlens.doctor import interpreter_of
+
+    return interpreter_of(command)
 
 
 DUPLICATE_WARNING = (
@@ -105,10 +156,17 @@ def cmd_status(args) -> int:
     st = installer.status(_settings_arg(args))
     plugin_on = _plugin_on(args)
     warnings: list[str] = []
-    if plugin_on and st.events:
+    # Without --settings/--scope, also report hooks found in this project's settings files.
+    others = []
+    if not getattr(args, "settings", None) and not getattr(args, "scope", None):
+        for scope in ("project", "local"):
+            o = installer.status(paths.scope_settings_path(scope, Path.cwd()))
+            if o.events or not o.valid:
+                others.append((scope, o))
+    if plugin_on and (st.events or any(o.events for _, o in others)):
         warnings.append(DUPLICATE_WARNING)
     if args.brief:
-        return _status_brief(st, plugin_on, warnings)
+        return _status_brief(st, plugin_on, warnings, others)
     n_events = len(installer.HOOK_EVENTS)
 
     if not st.valid:
@@ -120,14 +178,25 @@ def cmd_status(args) -> int:
         hooks_line = f"installed for {len(st.events)}/{n_events} events"
         if st.missing:
             warnings.append(f"missing hooks for: {', '.join(st.missing)} (run `agentlens install`)")
+    other_rows = []
+    for scope, o in others:
+        if not o.valid:
+            other_rows.append((f"{scope} hooks", "settings file is not valid JSON; cannot check", ""))
+            warnings.append(o.error or f"invalid {scope} settings")
+            continue
+        other_rows.append((f"{scope} hooks", f"installed for {len(o.events)}/{n_events} events "
+                           f"({render.short_path(str(o.settings_path), 60)})", ""))
+        if o.missing:
+            warnings.append(f"{scope} settings miss hooks for: {', '.join(o.missing)} "
+                            f"(run `agentlens install --scope {scope}`)")
     interp_lines = []
-    for cmd in sorted(st.commands):
+    for cmd in sorted(st.commands | {c for _, o in others for c in o.commands}):
         py = _interpreter_of(cmd)
         ok = bool(py) and os.path.isfile(py) and os.access(py, os.X_OK)
         interp_lines.append(f"{py}  {'ok' if ok else 'MISSING'}")
         if not ok:
             warnings.append(f"hook interpreter {py} does not exist; hooks will fail. Re-run `agentlens install`.")
-    if st.disable_all_hooks:
+    if st.disable_all_hooks or any(o.disable_all_hooks for _, o in others):
         warnings.append("disableAllHooks is set in your Claude Code settings: no hooks run, so nothing is recorded")
 
     db = paths.db_path()
@@ -137,6 +206,7 @@ def cmd_status(args) -> int:
         ("settings", render.short_path(str(st.settings_path), 80), ""),
         ("plugin", "enabled (records sessions)" if plugin_on else "not enabled", ""),
         ("settings hooks", hooks_line, ""),
+        *other_rows,
     ]
     for line in interp_lines:
         rows.append(("interpreter", line, ""))
@@ -184,11 +254,11 @@ def _last_log_error() -> str | None:
     return lines[-1][:160] if lines else None
 
 
-def _status_brief(st, plugin_on: bool, warnings: list[str]) -> int:
+def _status_brief(st, plugin_on: bool, warnings: list[str], others=()) -> int:
     """At most four short lines: this output enters the model's context via the skill."""
     if plugin_on:
         via = "recording via plugin"
-    elif st.events:
+    elif st.events or others:
         via = "recording via settings hooks"
     else:
         via = "NOT recording (enable the plugin or run `agentlens install`)"
@@ -214,6 +284,14 @@ def _status_brief(st, plugin_on: bool, warnings: list[str]) -> int:
     for w in warnings[:3]:
         print(f"! {w}")
     return 0
+
+
+def cmd_doctor(args) -> int:
+    from agentlens import doctor
+
+    checks = doctor.run(Path.cwd(), smoke=not args.no_hook_test)
+    print(doctor.render(checks))
+    return 1 if any(c.level == doctor.FAIL for c in checks) else 0
 
 
 def cmd_sessions(args) -> int:
@@ -242,10 +320,19 @@ def cmd_inspect(args) -> int:
             return 1
         calls = store.session_tool_calls(conn, s["provider"], s["session_id"])
         events = store.session_events(conn, s["provider"], s["session_id"])
-        print(render.render_inspect(s, calls, events, None if args.all else args.limit))
+        usage, reason = _session_usage(conn, s)
+        print(render.render_inspect(s, calls, events, None if args.all else args.limit, usage, reason))
     finally:
         conn.close()
     return 0
+
+
+def _session_usage(conn, s) -> tuple[dict, str | None]:
+    from agentlens import cache
+
+    usage = store.session_usage(conn, s["provider"], s["session_id"])
+    reason = None if usage["requests"] else cache.usage_reason(conn, s["provider"], s["session_id"])
+    return usage, reason
 
 
 def _pick_session(conn, prefix: str | None):
@@ -332,20 +419,36 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--version", action="version", version=f"agentlens {__version__}")
     sub = p.add_subparsers(dest="command", metavar="COMMAND")
 
-    s = sub.add_parser("install", help="add AgentLens hooks to Claude Code user settings (fallback to the plugin)")
-    s.add_argument("--settings", help="settings.json to edit (default: ~/.claude/settings.json)")
+    def where(sp, verb: str) -> None:
+        g = sp.add_mutually_exclusive_group()
+        g.add_argument("--scope", choices=paths.SCOPES,
+                       help=f"settings scope to {verb}: user (default, ~/.claude/settings.json), "
+                            "project (.claude/settings.json) or local (.claude/settings.local.json)")
+        g.add_argument("--settings", help=f"settings.json to {verb} (instead of --scope)")
+
+    s = sub.add_parser("install", help="add AgentLens hooks to Claude Code settings (fallback to the plugin)")
+    where(s, "edit")
+    s.add_argument("--dry-run", action="store_true", help="show the change as a diff; write nothing")
+    s.add_argument("--repair", action="store_true",
+                   help="also normalize AgentLens's own entries (duplicates, edited fields, retired events)")
     s.add_argument("--force", action="store_true", help="install even if the AgentLens plugin is enabled")
     s.add_argument("--python", help="interpreter the hook should use (default: this one)")
     s.set_defaults(func=cmd_install)
 
     s = sub.add_parser("uninstall", help="remove AgentLens hooks (recorded data is kept)")
-    s.add_argument("--settings", help="settings.json to edit")
+    where(s, "edit")
+    s.add_argument("--dry-run", action="store_true", help="show the change as a diff; write nothing")
     s.set_defaults(func=cmd_uninstall)
 
     s = sub.add_parser("status", help="show installation health and storage")
-    s.add_argument("--settings", help="settings.json to check")
+    where(s, "check")
     s.add_argument("--brief", action="store_true", help="at most four lines (used by the plugin skill)")
     s.set_defaults(func=cmd_status)
+
+    s = sub.add_parser("doctor", help="check the installation end to end and print a fix for each problem")
+    s.add_argument("--no-hook-test", action="store_true",
+                   help="skip running the configured hook command with a test event")
+    s.set_defaults(func=cmd_doctor)
 
     s = sub.add_parser("sessions", help="list recorded sessions")
     s.add_argument("--limit", type=int, default=20)

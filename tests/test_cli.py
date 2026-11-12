@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 
@@ -59,8 +60,8 @@ def test_inspect_shows_provenance_and_unavailable(recorded):
     out = r.stdout
     assert f"Session {SID}" in out
     assert "claude-sonnet-5-5" in out and "[obs]" in out
-    assert "tokens" in out and "unavailable (not in hook payloads" in out
-    assert "cost" in out and "unavailable (planned for v0.3)" in out
+    assert re.search(r"^  tokens +unavailable \(", out, re.MULTILINE)  # fixture transcript is absent
+    assert "cost" in out and "unavailable (pricing planned for v0.3)" in out
     # observed provider duration vs failure without duration
     assert "1.84 s [obs]" in out
     assert "failed (exit 2)" in out

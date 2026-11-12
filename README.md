@@ -53,7 +53,11 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[tui]'   # or -e . for CLI o
 .venv/bin/agentlens install
 ```
 
-`install` adds hooks to `~/.claude/settings.json` (backup first, atomic write, idempotent). It records the absolute path of the interpreter you run it with; if you move that virtualenv, `agentlens status` reports it as `MISSING`.
+`install` adds hooks to `~/.claude/settings.json` (backup first, atomic write, idempotent); if you set `CLAUDE_CONFIG_DIR`, it uses `$CLAUDE_CONFIG_DIR/settings.json`. Claude Code picks the change up without a restart. It records the absolute path of the interpreter you run it with; if you move that virtualenv, `agentlens status` reports it as `MISSING` and `agentlens install --repair` fixes it.
+
+- `--scope local` writes `.claude/settings.local.json` in the current project only (AgentLens warns if git does not ignore that file). `--scope project` writes `.claude/settings.json`, which is usually committed; since the hook names your machine's interpreter, prefer `local` or the plugin.
+- `--dry-run` shows exactly what would change, as a diff.
+- `agentlens doctor` checks the whole setup and prints a fix for anything wrong.
 
 **Don't use both.** Claude Code runs plugin hooks and settings hooks side by side, so every event would fire twice. `agentlens install` refuses while the plugin is enabled (override with `--force`), and `agentlens status` warns if both are active. To switch to the plugin, run `agentlens uninstall`.
 
@@ -93,7 +97,7 @@ How it works:
 Run `agentlens` with no arguments (or `agentlens dashboard`) to open the terminal dashboard.
 
 - **Home:** headline tiles (sessions, open now, tool calls, failed, failure rate, average tool time) for the selected project. Below them are your projects, every recorded session (open or ended, newest first) and a live activity feed across all sessions. `/` opens a filter (ID, project, model or state), `f` shows only sessions with failed tool calls, `Enter` opens a session.
-- **Session:** tiles for duration, tool calls, failures, prompts and total tool time. It opens on **Errors** when the session has any. Each failed call shows its full sanitized command, exit code, status, duration and complete error message. The other tabs are **Tool calls** (select a call to see everything recorded about it), **Timeline** and **Overview**.
+- **Session:** tiles for duration, tool calls, failures, prompts, total tool time and tokens in. It opens on **Errors** when the session has any. Each failed call shows its full sanitized command, exit code, status, duration and complete error message. The other tabs are **Tool calls** (select a call to see everything recorded about it), **Timeline** and **Overview**.
 - **Live:** while the dashboard is open it drains the spool every second and appends new events as they happen. `p` pauses, `r` syncs now, `?` shows the provenance legend, `Esc` goes back, `q` quits.
 
 Every value carries the same `[obs]`/`[calc]`/`[est]`/`[clk]` labels as the CLI. The dashboard never edits Claude Code settings and makes no network calls. Sessions stay in the database after Claude Code exits, so you can review them at any time.
@@ -102,11 +106,12 @@ Every value carries the same `[obs]`/`[calc]`/`[est]`/`[clk]` labels as the CLI.
 
 | Command | What it does |
 |---|---|
-| `agentlens install [--settings PATH] [--force]` | Fallback to the plugin. Adds async hooks for 18 Claude Code events (the same set the plugin registers). Backs up `settings.json` first and writes it atomically. Running it again changes nothing. Refuses to touch a settings file that is not valid JSON. |
-| `agentlens uninstall [--settings PATH]` | Removes only handlers whose command contains `agentlens hook`. Keeps recorded data. |
-| `agentlens status [--brief]` | Plugin and settings-hook installation, interpreter health, spool and database state, and warnings (double install, `disableAllHooks`). `--brief` prints at most four lines. |
-| `agentlens sessions [--limit N]` | Recent sessions: start, duration, state, prompts, tool calls, failures. |
-| `agentlens inspect <id-or-prefix> [--all]` | One session in detail: overview, tool calls, errors, timeline. |
+| `agentlens install [--scope user\|project\|local] [--dry-run] [--repair] [--force]` | Fallback to the plugin. Adds async hooks for 18 Claude Code events (the same set the plugin registers). Backs up the settings file first and writes it atomically. Running it again changes nothing. Refuses to touch a settings file that is not valid JSON. `--dry-run` prints the change as a diff and writes nothing. `--repair` also normalizes AgentLens's own entries (duplicates, edited fields, events it no longer uses) and never touches other hooks. |
+| `agentlens uninstall [--scope ...] [--dry-run]` | Removes only handlers whose command contains `agentlens hook`. Keeps recorded data. |
+| `agentlens status [--scope ...] [--brief]` | Plugin and settings-hook installation (user, project and local scopes), interpreter health, spool and database state, and warnings (double install, `disableAllHooks`). `--brief` prints at most four lines. |
+| `agentlens doctor [--no-hook-test]` | Read-only health check, one line per check (`ok`/`warn`/`FAIL`) with the fix to run. Runs each configured hook command with a test event against a temporary data directory, so your real data is never touched. Exits 1 if any check fails. |
+| `agentlens sessions [--limit N]` | Recent sessions: start, duration, state, prompts, tool calls, failures, tokens in/out. |
+| `agentlens inspect <id-or-prefix> [--all]` | One session in detail: overview (including API requests, input/output tokens and cache hit ratio), tool calls, errors, timeline. |
 | `agentlens cache [session] [--brief] [--requests]` | Cache coach report: hit ratio, misses, causes with evidence, and fixes. |
 | `agentlens` / `agentlens dashboard` | Opens the terminal dashboard (needs the `tui` extra). Without a terminal, prints help. |
 | `agentlens ingest` | Moves spooled events into the database. Runs automatically before every read. |
@@ -124,7 +129,7 @@ Every metric carries a label:
 
 A value that cannot be known is shown as `unavailable` with the reason. It is never guessed. For example:
 
-- **Token usage and cost** are not in hook payloads. They are planned for v0.3.
+- **Token usage** comes from the session transcript's per-request `usage` fields (`[obs]`; one count per API request, subagents included). That format is undocumented, so a session without a readable transcript shows tokens as unavailable with the reason. **Cost** needs pricing and is planned for v0.3.
 - **Session duration** is unavailable when AgentLens missed `SessionStart`, for example if it was installed mid-session.
 - **Tool duration** is `[obs]` when Claude Code sends `duration_ms`. Otherwise it is `[calc]` from the Pre/Post receive times. That value includes hook process start-up jitter of tens of milliseconds. If the Post event happened to be stamped before the Pre event, the duration is shown as unavailable.
 

@@ -34,6 +34,18 @@ def fmt_ts(ts: float | None, short: bool = False) -> str:
     return time.strftime("%m-%d %H:%M:%S" if short else "%Y-%m-%d %H:%M:%S", time.localtime(ts))
 
 
+def fmt_tokens(n: int | None) -> str:
+    if n is None:
+        return UNAVAILABLE
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.2f}M"
+    if n >= 10_000:
+        return f"{n / 1000:.0f}k"
+    if n >= 1000:
+        return f"{n / 1000:.1f}k"
+    return str(n)
+
+
 def fmt_duration_ms(ms: float | None) -> str:
     if ms is None:
         return UNAVAILABLE
@@ -243,7 +255,7 @@ def render_sessions(rows: Sequence[sqlite3.Row]) -> str:
         return "No sessions recorded yet. Run `agentlens install`, then start Claude Code."
     headers = [
         "SESSION", "PROJECT", "STARTED [clk]", "DURATION [calc]", "STATE",
-        "PROMPTS [calc]", "TOOLS [calc]", "FAILED [calc]",
+        "PROMPTS [calc]", "TOOLS [calc]", "FAILED [calc]", "TOKENS IN/OUT [obs]",
     ]
     body = []
     for s in rows:
@@ -257,12 +269,35 @@ def render_sessions(rows: Sequence[sqlite3.Row]) -> str:
             s["prompts"],
             s["tool_calls"],
             s["tool_failures"],
+            f"{fmt_tokens(s['tokens_in'])} / {fmt_tokens(s['tokens_out'])}" if s["api_requests"] else UNAVAILABLE,
         ])
     return table(headers, body) + "\n\n" + LEGEND
 
 
+def token_rows(usage: dict | None, reason: str | None = None) -> list[tuple[str, str, str]]:
+    """Per-session token totals (main conversation + subagents) with provenance."""
+    if not usage or not usage.get("requests"):
+        why = reason or "no per-request usage recorded for this session"
+        return [("tokens", f"{UNAVAILABLE} ({why})", "")]
+    reqs = f"{usage['main_requests']} main conversation, {usage['sub_requests']} subagent"
+    if usage["incomplete"]:
+        reqs += f" ({usage['incomplete']} missing usage fields)"
+    ratio = usage["hit_ratio"]
+    return [
+        ("API requests", reqs, CALC),
+        ("input tokens",
+         f"{fmt_tokens(usage['input'])} (cache read {fmt_tokens(usage['cache_read'])}, "
+         f"cache written {fmt_tokens(usage['cache_write'])}, uncached {fmt_tokens(usage['uncached'])})", OBS),
+        ("output tokens", fmt_tokens(usage["output"]), OBS),
+        ("cache hit ratio",
+         f"{ratio:.1%} (main conversation; details: agentlens cache)" if ratio is not None
+         else f"{UNAVAILABLE} (no complete main-conversation requests)", CALC if ratio is not None else ""),
+    ]
+
+
 def session_overview_rows(
-    s: sqlite3.Row, calls: Sequence[sqlite3.Row], events: Sequence[sqlite3.Row]
+    s: sqlite3.Row, calls: Sequence[sqlite3.Row], events: Sequence[sqlite3.Row],
+    usage: dict | None = None, usage_reason: str | None = None,
 ) -> list[tuple[str, str, str]]:
     dur, dur_tag = session_duration(s)
     by_status: dict[str, int] = {}
@@ -310,8 +345,8 @@ def session_overview_rows(
         ("subagents", str(types.count("subagent.start")), CALC),
         ("approvals", f"{approvals_req} requested, {approvals_den} denied", CALC),
         ("turn failures", str(types.count("turn.failure")), CALC),
-        ("tokens", f"{UNAVAILABLE} (not in hook payloads; planned for v0.3)", ""),
-        ("cost", f"{UNAVAILABLE} (planned for v0.3)", ""),
+        *token_rows(usage, usage_reason),
+        ("cost", f"{UNAVAILABLE} (pricing planned for v0.3)", ""),
     ]
     return rows
 
@@ -321,8 +356,10 @@ def render_inspect(
     calls: Sequence[sqlite3.Row],
     events: Sequence[sqlite3.Row],
     timeline_limit: int | None = 60,
+    usage: dict | None = None,
+    usage_reason: str | None = None,
 ) -> str:
-    rows = session_overview_rows(s, calls, events)
+    rows = session_overview_rows(s, calls, events, usage, usage_reason)
     out = [f"Session {s['session_id']}", kv(rows)]
 
     out.append("\nTool calls")

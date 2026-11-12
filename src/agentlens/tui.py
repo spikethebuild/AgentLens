@@ -37,7 +37,7 @@ from textual.widgets import (
     TabPane,
 )
 
-from agentlens import render, store
+from agentlens import cache, render, store
 from agentlens.ingest import ingest
 
 HISTORY_LIMIT = 1000  # sessions loaded into the explorer
@@ -207,6 +207,17 @@ def split_duration(ms: float | None) -> tuple[str, str]:
     return f"{h}:{m:02d}", "h:m"
 
 
+def split_tokens(n: int | None) -> tuple[str, str]:
+    """(digits, unit) for a token-count tile; Digits cannot draw letters."""
+    if n is None:
+        return "-", ""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.2f}", "M"
+    if n >= 1000:
+        return f"{n / 1000:.1f}", "k"
+    return str(n), ""
+
+
 def clock(ts: float | None) -> str:
     """HH:MM:SS for dense tables (full date stays in the detail panels)."""
     return render.fmt_ts(ts, short=True)[6:] if ts is not None else render.UNAVAILABLE
@@ -303,6 +314,7 @@ class SessionsScreen(Screen):
 
     COLUMNS = [
         "SESSION", "STARTED [clk]", "DURATION [calc]", "STATE", "TOOLS [calc]", "FAILED [calc]",
+        "TOKENS IN/OUT [obs]",
     ]
     FEED_COLUMNS = ["TIME [clk]", "SESSION", "EVENT", "DETAIL"]
 
@@ -416,6 +428,8 @@ class SessionsScreen(Screen):
                 state_cell(s),
                 Text(str(s["tool_calls"])),
                 failed_cell(s["tool_failures"]),
+                Text(f"{render.fmt_tokens(s['tokens_in'])} / {render.fmt_tokens(s['tokens_out'])}")
+                if s["api_requests"] else Text(render.UNAVAILABLE, style=DIM),
             ]))
         _set_rows(self.query_one("#sessions", DataTable), rows)
         panel = self.query_one("#sessions-panel")
@@ -559,6 +573,8 @@ class SessionScreen(Screen):
         self.session: sqlite3.Row | None = None
         self.calls: list[sqlite3.Row] = []
         self.events: list[sqlite3.Row] = []
+        self.usage: dict = {}
+        self.usage_reason: str | None = None
         self.last_rowid = 0
         # what the detail panels currently show (kv rows)
         self.tool_detail_rows: list[tuple[str, str, str]] = []
@@ -569,6 +585,9 @@ class SessionScreen(Screen):
         conn = self.app.conn
         self.session = store.find_session(conn, self.session_id)
         self.calls = store.session_tool_calls(conn, self.provider, self.session_id)
+        self.usage = store.session_usage(conn, self.provider, self.session_id)
+        self.usage_reason = (None if self.usage["requests"]
+                             else cache.usage_reason(conn, self.provider, self.session_id))
         new = store.session_events_after(conn, self.provider, self.session_id, self.last_rowid)
         if new:
             self.last_rowid = max(e["_rowid"] for e in new)
@@ -586,6 +605,7 @@ class SessionScreen(Screen):
             yield Tile("Failed", "[calc]", id="t-failed")
             yield Tile("Prompts", "[calc]", id="t-prompts")
             yield Tile("Tool time", "[calc]", id="t-tooltime")
+            yield Tile("Tokens in", "[obs]", id="t-tokens")
         with TabbedContent(initial=initial):
             with TabPane("Errors", id="errors"):
                 with Vertical(classes="panel list-panel", id="errors-panel"):
@@ -652,6 +672,12 @@ class SessionScreen(Screen):
         timed = [c["duration_ms"] for c in self.calls if c["duration_ms"] is not None]
         value, unit = split_duration(sum(timed) if timed else None)
         self.query_one("#t-tooltime", Tile).set(value, f"{unit} · sum of {len(timed)}" if timed else "")
+        if self.usage.get("requests"):
+            value, unit = split_tokens(self.usage["input"])
+            out = render.fmt_tokens(self.usage["output"])
+            self.query_one("#t-tokens", Tile).set(value, f"{unit} · out {out}".strip(" ·"))
+        else:
+            self.query_one("#t-tokens", Tile).set("-")
 
     def _render_all(self) -> None:
         self._refresh_title()
@@ -661,7 +687,7 @@ class SessionScreen(Screen):
             return
         self._render_tiles()
         self.query_one("#overview-body", Static).update(
-            kv_table(render.session_overview_rows(s, self.calls, self.events))
+            kv_table(render.session_overview_rows(s, self.calls, self.events, self.usage, self.usage_reason))
         )
         self._fill_tools()
         self._fill_errors()

@@ -359,7 +359,14 @@ SELECT s.*,
           AND t.status IN ('failed', 'interrupted'))                          AS tool_failures,
     (SELECT COUNT(*) FROM events e
         WHERE e.provider = s.provider AND e.session_id = s.session_id
-          AND e.type = 'prompt.submit')                                       AS prompts
+          AND e.type = 'prompt.submit')                                       AS prompts,
+    (SELECT COUNT(*) FROM api_requests r
+        WHERE r.provider = s.provider AND r.session_id = s.session_id)        AS api_requests,
+    (SELECT SUM(COALESCE(r.input_tokens, 0) + COALESCE(r.cache_read_tokens, 0)
+                + COALESCE(r.cache_write_tokens, 0)) FROM api_requests r
+        WHERE r.provider = s.provider AND r.session_id = s.session_id)        AS tokens_in,
+    (SELECT SUM(COALESCE(r.output_tokens, 0)) FROM api_requests r
+        WHERE r.provider = s.provider AND r.session_id = s.session_id)        AS tokens_out
 FROM sessions s
 """
 
@@ -523,3 +530,36 @@ def session_transcripts(conn: sqlite3.Connection, provider: str, session_id: str
     return conn.execute(
         "SELECT * FROM transcript_cursors WHERE provider = ? AND session_id = ?", (provider, session_id)
     ).fetchall()
+
+
+def session_usage(conn: sqlite3.Connection, provider: str, session_id: str) -> dict:
+    """Token totals of one session from per-request usage (main conversation and subagents).
+
+    Counts are sums of provider-reported values. ``incomplete`` counts requests
+    missing one of the input-side fields; their missing fields add nothing.
+    """
+    row = conn.execute(
+        """SELECT
+             SUM(is_sidechain = 0)                                   AS main_requests,
+             SUM(is_sidechain = 1)                                   AS sub_requests,
+             SUM(COALESCE(input_tokens, 0))                          AS uncached,
+             SUM(COALESCE(cache_read_tokens, 0))                     AS cache_read,
+             SUM(COALESCE(cache_write_tokens, 0))                    AS cache_write,
+             SUM(COALESCE(output_tokens, 0))                         AS output,
+             SUM(input_tokens IS NULL OR cache_read_tokens IS NULL
+                 OR cache_write_tokens IS NULL)                      AS incomplete,
+             SUM(CASE WHEN is_sidechain = 0 AND input_tokens IS NOT NULL
+                       AND cache_read_tokens IS NOT NULL AND cache_write_tokens IS NOT NULL
+                      THEN cache_read_tokens END)                    AS main_read,
+             SUM(CASE WHEN is_sidechain = 0 AND input_tokens IS NOT NULL
+                       AND cache_read_tokens IS NOT NULL AND cache_write_tokens IS NOT NULL
+                      THEN input_tokens + cache_read_tokens + cache_write_tokens END) AS main_in
+           FROM api_requests WHERE provider = ? AND session_id = ?""",
+        (provider, session_id),
+    ).fetchone()
+    usage = {k: (row[k] or 0) for k in row.keys()}
+    usage["requests"] = usage["main_requests"] + usage["sub_requests"]
+    usage["input"] = usage["uncached"] + usage["cache_read"] + usage["cache_write"]
+    # Same definition as the cache report: main conversation, complete requests only.
+    usage["hit_ratio"] = usage["main_read"] / usage["main_in"] if usage["main_in"] else None
+    return usage

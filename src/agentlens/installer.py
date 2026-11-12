@@ -6,10 +6,14 @@ Rules:
 * Idempotent: an existing AgentLens entry is never duplicated.
 * Uninstall removes only handlers whose command contains ``agentlens hook``.
 * A symlinked settings.json (dotfile repos) is written through, not replaced.
+* ``dry_run`` computes the same change and a unified diff, and writes nothing.
+* ``repair`` normalizes AgentLens's own handlers (one canonical handler per
+  registered event, none on other events); other handlers are never touched.
 """
 
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import shutil
@@ -39,12 +43,15 @@ class Change:
     added: list[str] = field(default_factory=list)
     updated: list[str] = field(default_factory=list)
     removed: list[str] = field(default_factory=list)
+    repaired: list[str] = field(default_factory=list)
     unchanged: list[str] = field(default_factory=list)
     backup: Path | None = None
+    dry_run: bool = False
+    diff: str = ""
 
     @property
     def changed(self) -> bool:
-        return bool(self.added or self.updated or self.removed)
+        return bool(self.added or self.updated or self.removed or self.repaired)
 
 
 def hook_command(python: str | None = None) -> str:
@@ -117,7 +124,7 @@ def _atomic_write(target: Path, doc: dict, original: bytes | None) -> None:
     mode = 0o644
     if original is not None:
         mode = os.stat(target).st_mode & 0o7777
-    body = (json.dumps(doc, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    body = _render(doc).encode("utf-8")
     tmp = target.with_name(f".{target.name}.agentlens-tmp-{os.getpid()}")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
     try:
@@ -137,8 +144,27 @@ def _atomic_write(target: Path, doc: dict, original: bytes | None) -> None:
             tmp.unlink()
 
 
-def _commit(path: Path, target: Path, doc: dict, original: bytes | None, change: Change) -> Change:
+def _render(doc: dict) -> str:
+    return json.dumps(doc, indent=2, ensure_ascii=False) + "\n"
+
+
+def _diff(path: Path, original: bytes | None, doc: dict) -> str:
+    before = original.decode("utf-8", "replace") if original else ""
+    lines = difflib.unified_diff(
+        before.splitlines(keepends=True), _render(doc).splitlines(keepends=True),
+        fromfile=f"{path} (current)" if original is not None else "/dev/null",
+        tofile=f"{path} (after)",
+    )
+    return "".join(lines)
+
+
+def _commit(path: Path, target: Path, doc: dict, original: bytes | None, change: Change,
+            dry_run: bool = False) -> Change:
     if not change.changed:
+        return change
+    if dry_run:
+        change.dry_run = True
+        change.diff = _diff(path, original, doc)
         return change
     if original is not None:
         change.backup = _backup(target, original)
@@ -149,7 +175,45 @@ def _commit(path: Path, target: Path, doc: dict, original: bytes | None, change:
 # ----------------------------------------------------------------- operations
 
 
-def install(settings_path: Path | None = None, python: str | None = None) -> Change:
+def _ours_in(groups: list) -> list[dict]:
+    return [
+        h for g in groups if isinstance(g, dict)
+        for h in (g.get("hooks") if isinstance(g.get("hooks"), list) else [])
+        if _is_ours(h)
+    ]
+
+
+def _strip_ours(groups: list) -> list:
+    """``groups`` without AgentLens handlers; groups emptied by that are dropped."""
+    out = []
+    for group in groups:
+        inner = group.get("hooks") if isinstance(group, dict) else None
+        if not isinstance(inner, list):
+            out.append(group)
+            continue
+        kept = [h for h in inner if not _is_ours(h)]
+        if len(kept) != len(inner):
+            if not kept:
+                continue
+            group = dict(group, hooks=kept)
+        out.append(group)
+    return out
+
+
+def _canonical(groups: list, event: str, python: str | None) -> bool:
+    """Exactly one AgentLens handler, in its own all-matching group, in canonical form."""
+    mine = [g for g in groups if isinstance(g, dict) and any(_is_ours(h) for h in _ours_in([g]))]
+    if len(mine) != 1:
+        return False
+    g = mine[0]
+    return (
+        set(g) <= {"hooks", "matcher"} and g.get("matcher") in (None, "", "*")
+        and g.get("hooks") == [_handler(event, python)]
+    )
+
+
+def install(settings_path: Path | None = None, python: str | None = None, *,
+            repair: bool = False, dry_run: bool = False) -> Change:
     path = settings_path or paths.claude_settings_path()
     target = _target(path)
     doc, original = _load(target)
@@ -159,14 +223,13 @@ def install(settings_path: Path | None = None, python: str | None = None) -> Cha
 
     for event in HOOK_EVENTS:
         groups = hooks.setdefault(event, [])
-        ours = [
-            h for g in groups if isinstance(g, dict)
-            for h in (g.get("hooks") if isinstance(g.get("hooks"), list) else [])
-            if _is_ours(h)
-        ]
+        ours = _ours_in(groups)
         if not ours:
             groups.append({"hooks": [_handler(event, python)]})
             change.added.append(event)
+        elif repair and not _canonical(groups, event, python):
+            hooks[event] = _strip_ours(groups) + [{"hooks": [_handler(event, python)]}]
+            change.repaired.append(event)
         elif any(h.get("command") != wanted_cmd for h in ours):
             for h in ours:
                 h["command"] = wanted_cmd  # e.g. the venv moved; keep the user's other fields
@@ -174,12 +237,22 @@ def install(settings_path: Path | None = None, python: str | None = None) -> Cha
         else:
             change.unchanged.append(event)
 
+    if repair:  # AgentLens handlers on events it no longer registers (e.g. MessageDisplay)
+        for event in [e for e in hooks if e not in HOOK_EVENTS]:
+            if _ours_in(hooks[event]):
+                kept = _strip_ours(hooks[event])
+                if kept:
+                    hooks[event] = kept
+                else:
+                    del hooks[event]
+                change.removed.append(event)
+
     if change.changed:
         doc["hooks"] = hooks
-    return _commit(path, target, doc, original, change)
+    return _commit(path, target, doc, original, change, dry_run)
 
 
-def uninstall(settings_path: Path | None = None) -> Change:
+def uninstall(settings_path: Path | None = None, *, dry_run: bool = False) -> Change:
     path = settings_path or paths.claude_settings_path()
     target = _target(path)
     doc, original = _load(target)
@@ -189,27 +262,15 @@ def uninstall(settings_path: Path | None = None) -> Change:
     hooks = _hooks_section(doc, path)
 
     for event in list(hooks):
-        new_groups = []
-        removed_here = False
-        for group in hooks[event]:
-            inner = group.get("hooks") if isinstance(group, dict) else None
-            if not isinstance(inner, list):
-                new_groups.append(group)
-                continue
-            kept = [h for h in inner if not _is_ours(h)]
-            if len(kept) != len(inner):
-                removed_here = True
-                if not kept:
-                    continue  # drop a matcher group we emptied
-                group = dict(group, hooks=kept)
-            new_groups.append(group)
-        if removed_here:
-            change.removed.append(event)
-            if new_groups:
-                hooks[event] = new_groups
-            else:
-                del hooks[event]
-    return _commit(path, target, doc, original, change)
+        if not _ours_in(hooks[event]):
+            continue
+        change.removed.append(event)
+        kept = _strip_ours(hooks[event])
+        if kept:
+            hooks[event] = kept
+        else:
+            del hooks[event]
+    return _commit(path, target, doc, original, change, dry_run)
 
 
 @dataclass

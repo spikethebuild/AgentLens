@@ -43,12 +43,34 @@ def config_path() -> Path:
     return home() / "config.json"
 
 
+SCOPES = ("user", "project", "local")
+
+
 def claude_settings_path() -> Path:
-    """User-level Claude Code settings. Overridable for tests and custom setups."""
+    """User-level Claude Code settings.
+
+    ``AGENTLENS_CLAUDE_SETTINGS`` (tests, custom setups) wins; otherwise Claude
+    Code's own ``CLAUDE_CONFIG_DIR`` moves the user settings directory.
+    """
     env = os.environ.get("AGENTLENS_CLAUDE_SETTINGS")
     if env:
         return Path(env).expanduser()
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+    if config_dir:
+        return Path(config_dir).expanduser() / "settings.json"
     return Path.home() / ".claude" / "settings.json"
+
+
+def scope_settings_path(scope: str, project_dir: Path | None = None) -> Path:
+    """Settings file for a Claude Code scope: user, project or local."""
+    if scope == "user":
+        return claude_settings_path()
+    base = (project_dir or Path.cwd()) / ".claude"
+    if scope == "project":
+        return base / "settings.json"
+    if scope == "local":
+        return base / "settings.local.json"
+    raise ValueError(f"unknown scope {scope!r}; expected one of {', '.join(SCOPES)}")
 
 
 def ensure_dir(path: Path) -> Path:
