@@ -192,3 +192,11 @@ def test_status_brief_when_nothing_installed(capsys, monkeypatch, tmp_path):
     assert cli.main(["status", "--brief"]) == 0
     out = capsys.readouterr().out.splitlines()
     assert "NOT recording" in out[0] and len(out) <= 4
+
+
+def test_cache_skill_is_user_invoked_and_short():
+    text = (ROOT / "skills" / "cache" / "SKILL.md").read_text()
+    front = text.split("---")[1]
+    assert "name: cache" in front and "disable-model-invocation: true" in front
+    assert '!`sh "${CLAUDE_PLUGIN_ROOT}/hooks/run.sh" cache --brief`' in text
+    assert len(text) < 600

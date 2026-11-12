@@ -248,6 +248,39 @@ def cmd_inspect(args) -> int:
     return 0
 
 
+def _pick_session(conn, prefix: str | None):
+    """A session by ID prefix, else the most recent one in this directory, else the most recent."""
+    if prefix:
+        return store.find_session(conn, prefix)
+    cwd = os.path.realpath(os.getcwd())
+    sessions = store.list_sessions(conn, 200)
+    here = [s for s in sessions if s["project"] and os.path.realpath(s["project"]) == cwd]
+    return (here or sessions or [None])[0]
+
+
+def cmd_cache(args) -> int:
+    from agentlens import cache
+
+    _sync(quiet=args.brief)
+    conn = store.connect()
+    try:
+        try:
+            s = _pick_session(conn, args.session_id)
+        except store.AmbiguousSession as exc:
+            print(f"error: '{args.session_id}' matches several sessions: {', '.join(x[:8] for x in exc.args[0])}",
+                  file=sys.stderr)
+            return 2
+        if s is None:
+            msg = f"no session matching '{args.session_id}'" if args.session_id else "no sessions recorded yet"
+            print(f"AgentLens cache: {msg}." if args.brief else f"error: {msg}.", file=sys.stdout if args.brief else sys.stderr)
+            return 0 if args.brief else 1
+        rep = cache.analyze(conn, s)
+        print(cache.render_brief(rep) if args.brief else cache.render_report(rep, args.requests))
+    finally:
+        conn.close()
+    return 0
+
+
 def cmd_ingest(args) -> int:
     r = ingest(wait_s=0.0 if args.quiet else READ_LOCK_WAIT_S)
     if not args.quiet:
@@ -326,6 +359,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("dashboard", help="open the terminal dashboard (same as running `agentlens` alone)")
     s.set_defaults(func=cmd_dashboard)
+
+    s = sub.add_parser("cache", help="where prompt cache was rebuilt in a session, why, and the fix")
+    s.add_argument("session_id", nargs="?", help="session ID or prefix (default: latest in this directory)")
+    s.add_argument("--brief", action="store_true", help="at most five lines (used by the plugin skill)")
+    s.add_argument("--requests", action="store_true", help="also list every API request")
+    s.set_defaults(func=cmd_cache)
 
     s = sub.add_parser("ingest", help="move spooled events into the database")
     s.add_argument("--quiet", action="store_true")
