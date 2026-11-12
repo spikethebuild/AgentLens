@@ -363,3 +363,38 @@ def session_events_after(
         " ORDER BY rowid",
         (provider, session_id, after_rowid),
     ).fetchall()
+
+
+def events_after(conn: sqlite3.Connection, after_rowid: int, limit: int = 200) -> list[sqlite3.Row]:
+    """Events from all sessions inserted after ``after_rowid``, oldest first (live feed)."""
+    return conn.execute(
+        "SELECT rowid AS _rowid, * FROM events WHERE rowid > ? ORDER BY rowid LIMIT ?",
+        (after_rowid, limit),
+    ).fetchall()
+
+
+def recent_events(conn: sqlite3.Connection, limit: int = 50) -> list[sqlite3.Row]:
+    """The latest ``limit`` events from all sessions, oldest first."""
+    rows = conn.execute(
+        "SELECT rowid AS _rowid, * FROM events ORDER BY rowid DESC LIMIT ?", (limit,)
+    ).fetchall()
+    return rows[::-1]
+
+
+@dataclass
+class ToolTimeStats:
+    timed: int          # calls with a duration
+    avg_ms: float | None
+    observed: int       # of those, durations reported by the provider
+
+
+def tool_time_stats(conn: sqlite3.Connection, project: str | None = None) -> ToolTimeStats:
+    """Average tool duration over calls that have one; ``project=""`` means no project."""
+    row = conn.execute(
+        """SELECT COUNT(t.duration_ms), AVG(t.duration_ms),
+                  COALESCE(SUM(t.duration_provenance = 'observed'), 0)
+           FROM tool_calls t JOIN sessions s USING (provider, session_id)
+           WHERE ? IS NULL OR COALESCE(s.project, '') = ?""",
+        (project, project),
+    ).fetchone()
+    return ToolTimeStats(row[0], row[1], row[2])

@@ -87,9 +87,13 @@ def test_session_list_shows_history_with_provenance():
         assert len(rows) == 1
         row = rows[0]
         assert row[0] == SID[:8]
-        assert "ended (prompt_input_exit)" in row
-        assert row[4] == "1"  # one failed tool call
+        assert row[3] == "ended"  # reason is in the session overview
+        assert row[5] == "1 ✗"  # one failed tool call: icon + number, not colour alone
         assert "[obs] reported by Claude Code" in str(app.screen.query_one("#legend").render())
+        tiles = {t.id: t.value for t in app.screen.query("Tile")}
+        assert tiles["t-sessions"] == "1" and tiles["t-tools"] == "3" and tiles["t-failed"] == "1"
+        assert tiles["t-rate"] == "33"
+        assert app.screen.query_one("#feed").row_count == len(events_for(SEQUENCE))
 
     drive(check)
 
@@ -143,15 +147,14 @@ def test_session_opens_on_errors_with_full_detail():
         assert tabs.active == "errors"
         errors = screen.query_one("#errors-table")
         assert errors.row_count == 2  # failed Bash call + StopFailure
-        detail = str(screen.query_one("#error-detail").render())
-        assert "failed (exit" in detail
-        assert "[obs]" in detail and "[clk]" in detail
-        assert "exit code" in detail
+        rows = {k: (v, tag) for k, v, tag in screen.error_detail_rows}
+        assert rows["status"][0].startswith("failed (exit")
+        assert rows["exit code"][1] == "[obs]" and rows["started"][1] == "[clk]"
+        assert rows["error"][0]  # full message, not clipped
 
         errors.move_cursor(row=1)
         await pilot.pause()
-        detail = str(screen.query_one("#error-detail").render())
-        assert "turn failure (StopFailure)" in detail
+        assert screen.error_detail_rows[0][1] == "turn failure (StopFailure)"
 
         await pilot.press("escape")
         await pilot.pause()
@@ -173,12 +176,11 @@ def test_tool_viewer_shows_input_status_and_duration_provenance():
         assert tools.row_count == 3
         tools.move_cursor(row=0)
         await pilot.pause()
-        detail = str(screen.query_one("#tool-detail").render())
-        assert "input.command" in detail
-        assert "status" in detail and "ok" in detail
-        assert "duration" in detail and ("[obs]" in detail or "[calc]" in detail)
-        overview = str(screen.query_one("#overview-body").render())
-        assert "tokens" in overview and "unavailable" in overview
+        rows = {k: (v, tag) for k, v, tag in screen.tool_detail_rows}
+        assert "input.command" in rows
+        assert rows["status"][0] == "ok"
+        assert rows["duration"][1] in ("[obs]", "[calc]")
+        assert {t.id: t.value for t in screen.query("Tile")}["t-tools"] == "3"
 
     drive(check)
 
@@ -188,10 +190,9 @@ def test_unpaired_tool_call_shows_unavailable_duration():
 
     async def check(app, pilot):
         await open_session(app, pilot, SID)
-        await pilot.press("t")
-        await pilot.pause()
-        detail = str(app.screen.query_one("#tool-detail").render())
-        assert "unavailable (no result recorded)" in detail
+        assert app.screen.query_one("TabbedContent").active == "tools"  # no errors
+        rows = {k: v for k, v, _ in app.screen.tool_detail_rows}
+        assert rows["duration"] == "unavailable (no result recorded)"
         assert "No errors recorded" in str(app.screen.query_one("#error-detail").render())
 
     drive(check)
@@ -234,6 +235,25 @@ def test_live_sync_shows_new_sessions_and_events_ingested_elsewhere():
         await app.sync()
         await pilot.pause()
         assert table.row_count == 2
+        assert app.screen.query_one("#feed").row_count == len(events_for(SEQUENCE)) + 1
+
+    drive(check)
+
+
+def test_filter_box_hidden_until_slash_and_legend_toggles():
+    seed(events_for(SEQUENCE))
+
+    async def check(app, pilot):
+        f = app.screen.query_one("#filter")
+        assert not f.display
+        await pilot.press("slash")
+        assert f.display and f.has_focus
+        await pilot.press("escape")
+        assert not f.display
+        legend = app.screen.query_one("#legend")
+        assert not legend.display
+        await pilot.press("question_mark")
+        assert legend.display
 
     drive(check)
 
