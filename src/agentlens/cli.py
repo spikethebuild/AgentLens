@@ -6,9 +6,10 @@ import argparse
 import os
 import shlex
 import sys
+import time
 from pathlib import Path
 
-from agentlens import __version__, installer, paths, render, spool, store
+from agentlens import __version__, installer, paths, plugin, render, spool, store
 from agentlens.ingest import ingest
 
 READ_LOCK_WAIT_S = 2.0
@@ -35,7 +36,20 @@ def _settings_arg(args) -> Path | None:
 # ----------------------------------------------------------------- commands
 
 
+def _plugin_on(args) -> bool:
+    settings = _settings_arg(args) or paths.claude_settings_path()
+    return plugin.plugin_enabled(settings, Path.cwd())
+
+
 def cmd_install(args) -> int:
+    if _plugin_on(args) and not args.force:
+        print(
+            "error: the AgentLens Claude Code plugin is enabled, and it already records every session.\n"
+            "Installing settings hooks too would make every event fire twice.\n"
+            "Use the plugin, or disable it first. Pass --force to install anyway.",
+            file=sys.stderr,
+        )
+        return 1
     try:
         change = installer.install(_settings_arg(args), python=args.python)
     except installer.SettingsError as exc:
@@ -80,10 +94,21 @@ def _interpreter_of(command: str) -> str | None:
     return parts[0] if parts else None
 
 
+DUPLICATE_WARNING = (
+    "AgentLens is installed twice (plugin and settings hooks), so events fire twice. "
+    "Run `agentlens uninstall` to keep only the plugin."
+)
+
+
 def cmd_status(args) -> int:
     _sync(quiet=True)
     st = installer.status(_settings_arg(args))
+    plugin_on = _plugin_on(args)
     warnings: list[str] = []
+    if plugin_on and st.events:
+        warnings.append(DUPLICATE_WARNING)
+    if args.brief:
+        return _status_brief(st, plugin_on, warnings)
     n_events = len(installer.HOOK_EVENTS)
 
     if not st.valid:
@@ -110,7 +135,8 @@ def cmd_status(args) -> int:
         ("version", __version__, ""),
         ("home", render.short_path(str(paths.home()), 80) + ("  (AGENTLENS_HOME)" if os.environ.get("AGENTLENS_HOME") else ""), ""),
         ("settings", render.short_path(str(st.settings_path), 80), ""),
-        ("hooks", hooks_line, ""),
+        ("plugin", "enabled (records sessions)" if plugin_on else "not enabled", ""),
+        ("settings hooks", hooks_line, ""),
     ]
     for line in interp_lines:
         rows.append(("interpreter", line, ""))
@@ -145,6 +171,49 @@ def cmd_status(args) -> int:
         print(f"warning: {w}")
     return 0
 
+
+
+def _last_log_error() -> str | None:
+    log = paths.logs_dir() / "agentlens.log"
+    try:
+        with open(log, "rb") as fh:
+            fh.seek(max(0, log.stat().st_size - 4096))
+            lines = [ln for ln in fh.read().decode("utf-8", "replace").splitlines() if " ERROR " in ln]
+    except OSError:
+        return None
+    return lines[-1][:160] if lines else None
+
+
+def _status_brief(st, plugin_on: bool, warnings: list[str]) -> int:
+    """At most four short lines: this output enters the model's context via the skill."""
+    if plugin_on:
+        via = "recording via plugin"
+    elif st.events:
+        via = "recording via settings hooks"
+    else:
+        via = "NOT recording (enable the plugin or run `agentlens install`)"
+    line = f"AgentLens {__version__} · {via}"
+    db = paths.db_path()
+    if db.exists():
+        conn = store.connect()
+        try:
+            t = store.totals(conn)
+            # evidence-based: both installs actually delivered events in the last day
+            seen = store.collectors_seen(conn, time.time() - 86400)
+            if seen >= {"plugin", "settings"} and DUPLICATE_WARNING not in warnings:
+                warnings.append(DUPLICATE_WARNING)
+        finally:
+            conn.close()
+        line += f" · {t.sessions} sessions · last event {render.fmt_ts(t.last_event_ts, short=True)}"
+    print(line)
+    if spool.failed_count():
+        warnings.append(f"{spool.failed_count()} spool file(s) failed to ingest")
+    err = _last_log_error()
+    if err:
+        warnings.append(f"last error: {err}")
+    for w in warnings[:3]:
+        print(f"! {w}")
+    return 0
 
 
 def cmd_sessions(args) -> int:
@@ -230,8 +299,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--version", action="version", version=f"agentlens {__version__}")
     sub = p.add_subparsers(dest="command", metavar="COMMAND")
 
-    s = sub.add_parser("install", help="add AgentLens hooks to Claude Code user settings")
+    s = sub.add_parser("install", help="add AgentLens hooks to Claude Code user settings (fallback to the plugin)")
     s.add_argument("--settings", help="settings.json to edit (default: ~/.claude/settings.json)")
+    s.add_argument("--force", action="store_true", help="install even if the AgentLens plugin is enabled")
     s.add_argument("--python", help="interpreter the hook should use (default: this one)")
     s.set_defaults(func=cmd_install)
 
@@ -241,6 +311,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("status", help="show installation health and storage")
     s.add_argument("--settings", help="settings.json to check")
+    s.add_argument("--brief", action="store_true", help="at most four lines (used by the plugin skill)")
     s.set_defaults(func=cmd_status)
 
     s = sub.add_parser("sessions", help="list recorded sessions")

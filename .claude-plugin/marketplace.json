@@ -1,0 +1,14 @@
+{
+  "name": "agentlens",
+  "description": "AgentLens: local-first token and prompt-cache observability for coding agents.",
+  "owner": {
+    "name": "Siddharth"
+  },
+  "plugins": [
+    {
+      "name": "agentlens",
+      "source": "./",
+      "description": "Find out where your coding agent's tokens and cache went, and how to waste less."
+    }
+  ]
+}

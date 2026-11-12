@@ -12,6 +12,7 @@ cancelled. If that spawn is lost, the next CLI read ingests the spool anyway.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 
@@ -46,6 +47,11 @@ def handle(provider: str, raw: bytes, received_at: float) -> None:
     from agentlens.adapters import claude_code
 
     events = claude_code.normalize(payload, received_at)
+    # Which install fired this copy. Plugin and settings hooks both run if both are
+    # installed (Claude Code does not merge them), so `status` reports the overlap.
+    via = "plugin" if os.environ.get("AGENTLENS_VIA") == "plugin" else "settings"
+    for ev in events:
+        ev.data["collector"] = via
     spool.write_events(events)
     if any(e.type == "session.end" for e in events):
         _spawn_ingest()

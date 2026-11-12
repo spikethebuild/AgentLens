@@ -1,25 +1,42 @@
 # AgentLens
 
-**Maximum visibility. Minimum token overhead.**
+**Find out where your coding agent's tokens and cache went, and how to waste less.**
 
-AgentLens is a local-first observability tool for AI coding agents. It records what Claude Code does (sessions, prompts, tool calls, failures, approvals) through Claude Code's official hooks and stores it in a local SQLite database. It makes **zero LLM calls**, never blocks the agent, and never stores file contents, prompt text or secrets.
+AgentLens is a local-first observability tool for AI coding agents. It records what Claude Code does (sessions, prompts, tool calls, failures, approvals, compactions, model switches, instruction files loaded) through Claude Code's official hooks and stores it in a local SQLite database. It makes **zero LLM calls**, never blocks the agent, and never stores file contents, prompt text or secrets.
 
-> Status: **v0.2 Terminal Experience, in progress**. The CLI and a first terminal dashboard work. Token and cost analytics (v0.3) and Codex support (v0.5) are not built yet.
+> Status: **v0.2 plugin packaging**. Recording, the CLI and a terminal dashboard work. The cache coach (v0.3: where prompt cache was rebuilt, why, and the fix) is next. Codex support is planned for v0.5.
 
 ## Install
 
-Requires Python 3.10+ and macOS or Linux. The hooks and the plain CLI have no runtime dependencies. The dashboard needs the optional `tui` extra (Textual and Rich).
+Requires Python 3.10+ on macOS or Linux. Recording needs only the standard library, so nothing is pip-installed for the plugin.
 
-```bash
-git clone <this repo> && cd AgentLens
-python3 -m venv .venv && .venv/bin/pip install -e '.[tui]'   # or -e . for CLI only
-.venv/bin/agentlens install      # adds hooks to ~/.claude/settings.json
-.venv/bin/agentlens status
+### As a Claude Code plugin (recommended)
+
+In Claude Code:
+
+```
+/plugin marketplace add SiddharthDevare10/AgentLens
+/plugin install agentlens@agentlens
 ```
 
-`install` records the absolute path of the interpreter you run it with. If you move or delete that virtualenv, `agentlens status` reports the interpreter as `MISSING`. Re-run `install` to fix it.
+Then run `/reload-plugins` or start a new session. Every session is recorded from then on. `/agentlens:status` prints a short health check.
 
-Start Claude Code as usual. Every new session is recorded automatically.
+The plugin's hooks run `hooks/run.sh`, which finds Python 3.10+ (set `AGENTLENS_PYTHON` to choose one), runs the bundled collector and **always exits 0**. If no Python is found, it logs one line to `~/.agentlens/logs/agentlens.log` and does nothing else. Recorded data lives in `~/.agentlens` (or `AGENTLENS_HOME`), so it survives uninstalling or updating the plugin.
+
+### Fallback: settings hooks
+
+For the CLI and dashboard in your own terminal, or if you don't use plugins:
+
+```bash
+git clone https://github.com/SiddharthDevare10/AgentLens && cd AgentLens
+python3 -m venv .venv && .venv/bin/pip install -e '.[tui]'   # or -e . for CLI only
+.venv/bin/agentlens status
+.venv/bin/agentlens install      # only if you are NOT using the plugin
+```
+
+`install` adds hooks to `~/.claude/settings.json` (backup first, atomic write, idempotent). It records the absolute path of the interpreter you run it with; if you move that virtualenv, `agentlens status` reports it as `MISSING`.
+
+**Don't use both.** Claude Code runs plugin hooks and settings hooks side by side, so every event would fire twice. `agentlens install` refuses while the plugin is enabled (override with `--force`), and `agentlens status` warns if both are active. To switch to the plugin, run `agentlens uninstall`.
 
 ## Dashboard
 
@@ -35,9 +52,9 @@ Every value carries the same `[obs]`/`[calc]`/`[est]`/`[clk]` labels as the CLI.
 
 | Command | What it does |
 |---|---|
-| `agentlens install [--settings PATH]` | Adds async hooks for 14 Claude Code events. Backs up `settings.json` first and writes it atomically. Running it again changes nothing. Refuses to touch a settings file that is not valid JSON. |
+| `agentlens install [--settings PATH] [--force]` | Fallback to the plugin. Adds async hooks for 18 Claude Code events (the same set the plugin registers). Backs up `settings.json` first and writes it atomically. Running it again changes nothing. Refuses to touch a settings file that is not valid JSON. |
 | `agentlens uninstall [--settings PATH]` | Removes only handlers whose command contains `agentlens hook`. Keeps recorded data. |
-| `agentlens status` | Hook installation, interpreter health, spool and database state, and warnings (for example `disableAllHooks`). |
+| `agentlens status [--brief]` | Plugin and settings-hook installation, interpreter health, spool and database state, and warnings (double install, `disableAllHooks`). `--brief` prints at most four lines. |
 | `agentlens sessions [--limit N]` | Recent sessions: start, duration, state, prompts, tool calls, failures. |
 | `agentlens inspect <id-or-prefix> [--all]` | One session in detail: overview, tool calls, errors, timeline. |
 | `agentlens` / `agentlens dashboard` | Opens the terminal dashboard (needs the `tui` extra). Without a terminal, prints help. |

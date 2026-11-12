@@ -130,3 +130,15 @@ def test_hook_latency(subprocess_env, fixture):
     median = statistics.median(times)
     print(f"\nhook wall time median: {median * 1000:.0f} ms")
     assert median < 1.0
+
+
+def test_collector_marks_plugin_and_settings(fixture, monkeypatch):
+    from agentlens import hook, spool
+
+    raw = json.dumps(fixture("stop")).encode()
+    monkeypatch.delenv("AGENTLENS_VIA", raising=False)
+    hook.handle("claude-code", raw, 1_763_000_000.0)
+    monkeypatch.setenv("AGENTLENS_VIA", "plugin")
+    hook.handle("claude-code", raw, 1_763_000_100.0)
+    seen = sorted(ev.data["collector"] for p in spool.pending() for ev in spool.read_events(p))
+    assert seen == ["plugin", "settings"]

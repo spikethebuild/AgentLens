@@ -398,3 +398,11 @@ def tool_time_stats(conn: sqlite3.Connection, project: str | None = None) -> Too
         (project, project),
     ).fetchone()
     return ToolTimeStats(row[0], row[1], row[2])
+
+
+def collectors_seen(conn: sqlite3.Connection, since_ts: float) -> set[str]:
+    """Which installs ("plugin" / "settings") delivered events since ``since_ts``."""
+    rows = conn.execute(
+        "SELECT DISTINCT json_extract(data, '$.collector') FROM events WHERE ts >= ?", (since_ts,)
+    ).fetchall()
+    return {r[0] for r in rows if r[0]}
