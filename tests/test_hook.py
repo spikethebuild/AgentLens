@@ -112,7 +112,7 @@ def test_fast_path_does_not_import_sqlite(subprocess_env):
         "import runpy\n"
         "try:\n runpy.run_module('agentlens', run_name='__main__')\n"
         "except SystemExit as e:\n assert e.code == 0, e.code\n"
-        "heavy = [m for m in ('sqlite3','argparse','subprocess') if m in sys.modules]\n"
+        "heavy = [m for m in ('sqlite3','argparse','subprocess','textual','rich') if m in sys.modules]\n"
         "print(','.join(heavy))"
     )
     r = subprocess.run([PY, "-c", code], env=subprocess_env, capture_output=True, text=True, timeout=30)

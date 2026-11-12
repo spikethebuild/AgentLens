@@ -130,15 +130,109 @@ def tool_summary(tool_name: str | None, data_json: str | None) -> str:
     return " ".join(parts)
 
 
-def _status_detail(call: sqlite3.Row) -> str:
-    status = call["status"]
+def parse_data(data_json: str | None) -> dict:
     try:
-        res = json.loads(call["result_data"]) if call["result_data"] else {}
+        data = json.loads(data_json) if data_json else {}
     except ValueError:
-        res = {}
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def status_detail(call: sqlite3.Row) -> str:
+    status = call["status"]
+    res = parse_data(call["result_data"])
     if status == "failed" and "exit_code" in res:
         return f"failed (exit {res['exit_code']})"
     return "no result" if status == "no_result" else status
+
+
+def duration_tag(call: sqlite3.Row) -> str:
+    return {"observed": OBS, "calculated": CALC}.get(call["duration_provenance"] or "", "")
+
+
+def duration_parts(call: sqlite3.Row) -> tuple[str, str]:
+    """(duration, provenance tag), or why the duration is unavailable."""
+    if call["duration_ms"] is None:
+        if call["status"] == "no_result":
+            return f"{UNAVAILABLE} (no result recorded)", ""
+        if call["started_at"] is None:
+            return f"{UNAVAILABLE} (no start event)", ""
+        return UNAVAILABLE, ""
+    return fmt_duration_ms(call["duration_ms"]), duration_tag(call)
+
+
+def duration_text(call: sqlite3.Row) -> str:
+    return " ".join(x for x in duration_parts(call) if x)
+
+
+def tool_call_fields(call: sqlite3.Row) -> list[tuple[str, str, str]]:
+    """Every stored fact about one tool call, untruncated, as kv() rows."""
+    pre = parse_data(call["pre_data"])
+    res = parse_data(call["result_data"])
+    rows: list[tuple[str, str, str]] = [
+        ("tool", call["tool_name"] or "?", OBS if call["tool_name"] else ""),
+        ("tool use id", call["tool_use_id"] or UNAVAILABLE, OBS if call["tool_use_id"] else ""),
+        ("status", status_detail(call), OBS if call["status"] not in ("no_result", "denied") else CALC),
+        ("started", fmt_ts(call["started_at"]) if call["started_at"] else f"{UNAVAILABLE} (no PreToolUse)",
+         CLK if call["started_at"] else ""),
+        ("finished", fmt_ts(call["ended_at"]) if call["ended_at"] else f"{UNAVAILABLE} (no result)",
+         CLK if call["ended_at"] else ""),
+        ("duration", *duration_parts(call)),
+    ]
+    inp = pre.get("input") if isinstance(pre.get("input"), dict) else None
+    if inp is None:
+        inp = res.get("input") if isinstance(res.get("input"), dict) else None
+    if inp:
+        for k, v in inp.items():
+            if isinstance(v, dict):
+                v = ", ".join(f"{a}={b}" for a, b in v.items())
+            rows.append((f"input.{k}", str(v), OBS))
+    else:
+        rows.append(("input", f"{UNAVAILABLE} (not recorded)", ""))
+    if "exit_code" in res:
+        rows.append(("exit code", str(res["exit_code"]), OBS))
+    if res.get("is_interrupt"):
+        rows.append(("interrupted", "yes (user interrupt)", OBS))
+    if res.get("error"):
+        rows.append(("error", str(res["error"]), OBS))
+    return rows
+
+
+def error_events(events: Sequence[sqlite3.Row]) -> list[sqlite3.Row]:
+    return [e for e in events if e["type"] in ("tool.failure", "turn.failure")]
+
+
+def error_message(e: sqlite3.Row) -> str:
+    data = parse_data(e["data"])
+    msg = data.get("error") or ""
+    if data.get("error_details"):
+        msg += f": {data['error_details']}"
+    return msg or UNAVAILABLE
+
+
+def event_detail(e: sqlite3.Row) -> str:
+    """One-line description of a timeline event."""
+    data = parse_data(e["data"])
+    t = e["type"]
+    if e["tool_name"]:
+        return e["tool_name"] + (f" {e['status']}" if e["status"] else "")
+    if t == "prompt.submit":
+        if "prompt_text" in data:
+            return str(data["prompt_text"])
+        return f"{data.get('prompt_chars', '?')} chars (text not stored)"
+    if t == "session.start":
+        return data.get("start_source", "")
+    if t == "session.end":
+        return data.get("end_reason", "")
+    if t == "notification":
+        return data.get("notification_type") or data.get("message", "")
+    if t.startswith("subagent."):
+        return data.get("agent_type", "")
+    if t == "turn.failure":
+        return data.get("error", "")
+    if t == "session.compact":
+        return data.get("trigger", "")
+    return ""
 
 
 # ------------------------------------------------------------------ commands
@@ -167,12 +261,9 @@ def render_sessions(rows: Sequence[sqlite3.Row]) -> str:
     return table(headers, body) + "\n\n" + LEGEND
 
 
-def render_inspect(
-    s: sqlite3.Row,
-    calls: Sequence[sqlite3.Row],
-    events: Sequence[sqlite3.Row],
-    timeline_limit: int | None = 60,
-) -> str:
+def session_overview_rows(
+    s: sqlite3.Row, calls: Sequence[sqlite3.Row], events: Sequence[sqlite3.Row]
+) -> list[tuple[str, str, str]]:
     dur, dur_tag = session_duration(s)
     by_status: dict[str, int] = {}
     for c in calls:
@@ -222,34 +313,39 @@ def render_inspect(
         ("tokens", f"{UNAVAILABLE} (not in hook payloads; planned for v0.3)", ""),
         ("cost", f"{UNAVAILABLE} (planned for v0.3)", ""),
     ]
+    return rows
+
+
+def render_inspect(
+    s: sqlite3.Row,
+    calls: Sequence[sqlite3.Row],
+    events: Sequence[sqlite3.Row],
+    timeline_limit: int | None = 60,
+) -> str:
+    rows = session_overview_rows(s, calls, events)
     out = [f"Session {s['session_id']}", kv(rows)]
 
     out.append("\nTool calls")
     if calls:
         trows = []
         for c in calls:
-            prov = {"observed": OBS, "calculated": CALC}.get(c["duration_provenance"] or "", "")
             trows.append([
                 fmt_ts(c["started_at"] or c["ended_at"], short=True),
                 c["tool_name"] or "?",
-                _status_detail(c),
-                f"{fmt_duration_ms(c['duration_ms'])} {prov}".strip(),
+                status_detail(c),
+                duration_text(c),
                 clip(tool_summary(c["tool_name"], c["pre_data"]), 70),
             ])
         out.append(table(["TIME [clk]", "TOOL", "STATUS", "DURATION", "INPUT (sanitized)"], trows))
     else:
         out.append("  none recorded")
 
-    failures = [e for e in events if e["type"] in ("tool.failure", "turn.failure")]
+    failures = error_events(events)
     if failures:
         out.append("\nErrors")
         for e in failures:
-            data = json.loads(e["data"])
-            msg = data.get("error") or ""
-            if data.get("error_details"):
-                msg += f": {data['error_details']}"
             label = e["tool_name"] or "turn"
-            out.append(f"  {fmt_ts(e['ts'], short=True)}  {label:<8} {clip(msg, 90)}")
+            out.append(f"  {fmt_ts(e['ts'], short=True)}  {label:<8} {clip(error_message(e), 90)}")
 
     shown = events if timeline_limit is None else events[-timeline_limit:]
     out.append(
@@ -257,25 +353,7 @@ def render_inspect(
     )
     erows = []
     for e in shown:
-        data = json.loads(e["data"])
-        detail = ""
-        if e["tool_name"]:
-            detail = e["tool_name"] + (f" {e['status']}" if e["status"] else "")
-        elif e["type"] == "prompt.submit":
-            detail = f"{data.get('prompt_chars', '?')} chars (text not stored)" if "prompt_text" not in data else clip(data["prompt_text"], 60)
-        elif e["type"] == "session.start":
-            detail = data.get("start_source", "")
-        elif e["type"] == "session.end":
-            detail = data.get("end_reason", "")
-        elif e["type"] == "notification":
-            detail = data.get("notification_type") or data.get("message", "")
-        elif e["type"].startswith("subagent."):
-            detail = data.get("agent_type", "")
-        elif e["type"] == "turn.failure":
-            detail = data.get("error", "")
-        elif e["type"] == "session.compact":
-            detail = data.get("trigger", "")
-        erows.append([fmt_ts(e["ts"], short=True), e["type"], clip(str(detail), 70)])
+        erows.append([fmt_ts(e["ts"], short=True), e["type"], clip(str(event_detail(e)), 70)])
     out.append(table(["TIME [clk]", "EVENT", "DETAIL"], erows))
     out.append("\n" + LEGEND)
     return "\n".join(out)

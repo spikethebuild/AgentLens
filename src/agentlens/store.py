@@ -344,3 +344,22 @@ def session_tool_calls(conn: sqlite3.Connection, provider: str, session_id: str)
         " ORDER BY COALESCE(started_at, ended_at)",
         (provider, session_id),
     ).fetchall()
+
+
+def max_event_rowid(conn: sqlite3.Connection) -> int:
+    return conn.execute("SELECT COALESCE(MAX(rowid), 0) FROM events").fetchone()[0]
+
+
+def session_events_after(
+    conn: sqlite3.Connection, provider: str, session_id: str, after_rowid: int
+) -> list[sqlite3.Row]:
+    """Events of one session inserted after ``after_rowid`` (for live tailing).
+
+    rowid follows insertion order, so this returns only what a later ingest added.
+    Rows carry ``_rowid`` so the caller can advance its cursor.
+    """
+    return conn.execute(
+        "SELECT rowid AS _rowid, * FROM events WHERE provider = ? AND session_id = ? AND rowid > ?"
+        " ORDER BY rowid",
+        (provider, session_id, after_rowid),
+    ).fetchall()

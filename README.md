@@ -4,15 +4,15 @@
 
 AgentLens is a local-first observability tool for AI coding agents. It records what Claude Code does (sessions, prompts, tool calls, failures, approvals) through Claude Code's official hooks and stores it in a local SQLite database. It makes **zero LLM calls**, never blocks the agent, and never stores file contents, prompt text or secrets.
 
-> Status: **v0.1 Foundation**. CLI only. The terminal dashboard (v0.2), token and cost analytics (v0.3), and Codex support (v0.5) are not built yet.
+> Status: **v0.2 Terminal Experience, in progress**. The CLI and a first terminal dashboard work. Token and cost analytics (v0.3) and Codex support (v0.5) are not built yet.
 
 ## Install
 
-Requires Python 3.10+ and macOS or Linux. No runtime dependencies.
+Requires Python 3.10+ and macOS or Linux. The hooks and the plain CLI have no runtime dependencies. The dashboard needs the optional `tui` extra (Textual and Rich).
 
 ```bash
 git clone <this repo> && cd AgentLens
-python3 -m venv .venv && .venv/bin/pip install -e .
+python3 -m venv .venv && .venv/bin/pip install -e '.[tui]'   # or -e . for CLI only
 .venv/bin/agentlens install      # adds hooks to ~/.claude/settings.json
 .venv/bin/agentlens status
 ```
@@ -20,6 +20,16 @@ python3 -m venv .venv && .venv/bin/pip install -e .
 `install` records the absolute path of the interpreter you run it with. If you move or delete that virtualenv, `agentlens status` reports the interpreter as `MISSING`. Re-run `install` to fix it.
 
 Start Claude Code as usual. Every new session is recorded automatically.
+
+## Dashboard
+
+Run `agentlens` with no arguments (or `agentlens dashboard`) to open the terminal dashboard.
+
+- **Sessions:** every recorded session, open or ended, newest first. Projects (grouped by working directory) are on the left. `/` filters by ID, project, model or state. `f` shows only sessions with failed tool calls. `Enter` opens a session.
+- **Session:** opens on **Errors** when the session has any. Each failed call shows its full sanitized command, exit code, status, duration and complete error message. The other tabs are **Overview**, **Tool calls** (select a call to see everything recorded about it) and **Timeline**.
+- **Live:** while the dashboard is open it drains the spool every second and appends new events as they happen. `p` pauses, `r` syncs now, `Esc` goes back, `q` quits.
+
+Every value carries the same `[obs]`/`[calc]`/`[est]`/`[clk]` labels as the CLI. The dashboard never edits Claude Code settings and makes no network calls. Sessions stay in the database after Claude Code exits, so you can review them at any time.
 
 ## Commands
 
@@ -30,6 +40,7 @@ Start Claude Code as usual. Every new session is recorded automatically.
 | `agentlens status` | Hook installation, interpreter health, spool and database state, and warnings (for example `disableAllHooks`). |
 | `agentlens sessions [--limit N]` | Recent sessions: start, duration, state, prompts, tool calls, failures. |
 | `agentlens inspect <id-or-prefix> [--all]` | One session in detail: overview, tool calls, errors, timeline. |
+| `agentlens` / `agentlens dashboard` | Opens the terminal dashboard (needs the `tui` extra). Without a terminal, prints help. |
 | `agentlens ingest` | Moves spooled events into the database. Runs automatically before every read. |
 
 ## Where the numbers come from

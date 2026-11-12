@@ -190,6 +190,28 @@ def cmd_ingest(args) -> int:
     return 0
 
 
+def run_dashboard(parser: argparse.ArgumentParser | None = None) -> int:
+    """Open the TUI, or explain how to get it when the optional extra is missing."""
+    import importlib
+
+    try:
+        tui = importlib.import_module("agentlens.tui")
+    except ImportError:
+        print(
+            "The dashboard needs the optional TUI dependencies:\n"
+            "  pip install 'agentlens[tui]'\n"
+            "The plain commands below work without them.\n",
+            file=sys.stderr,
+        )
+        (parser or build_parser()).print_help()
+        return 1
+    return tui.run()
+
+
+def cmd_dashboard(args) -> int:
+    return run_dashboard()
+
+
 def cmd_hook(args) -> int:
     from agentlens.hook import run
 
@@ -231,6 +253,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--all", action="store_true", help="show the full timeline")
     s.set_defaults(func=cmd_inspect)
 
+    s = sub.add_parser("dashboard", help="open the terminal dashboard (same as running `agentlens` alone)")
+    s.set_defaults(func=cmd_dashboard)
+
     s = sub.add_parser("ingest", help="move spooled events into the database")
     s.add_argument("--quiet", action="store_true")
     s.set_defaults(func=cmd_ingest)
@@ -248,6 +273,8 @@ def main(argv: list[str] | None = None) -> int:
 
         return run(argv[1:])
     parser = build_parser()
+    if not argv and sys.stdin.isatty() and sys.stdout.isatty():
+        return run_dashboard(parser)
     args = parser.parse_args(argv)
     if not getattr(args, "func", None):
         parser.print_help()
