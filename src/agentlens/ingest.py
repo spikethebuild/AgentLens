@@ -34,6 +34,7 @@ class IngestResult:
     duplicates: int = 0
     failed: int = 0
     locked: bool = False
+    requests: int = 0  # API usage records read from transcripts
 
 
 @contextmanager
@@ -77,9 +78,50 @@ def _insert_files(conn: sqlite3.Connection, loaded: list[tuple[Path, list]], res
         return
     result.inserted += inserted
     result.duplicates += len(events) - inserted
+    _register_transcripts(conn, events)
     for path, _ in loaded:
         path.unlink(missing_ok=True)
         result.files += 1
+
+
+def _register_transcripts(conn: sqlite3.Connection, events: list) -> None:
+    """Remember transcript paths seen in hook payloads so usage can be read later."""
+    with conn:
+        for ev in events:
+            main = ev.data.get("transcript_path")
+            if isinstance(main, str) and main:
+                store.register_transcript(conn, main, ev.provider, ev.session_id)
+            sub = ev.data.get("agent_transcript_path")
+            if isinstance(sub, str) and sub:
+                store.register_transcript(conn, sub, ev.provider, ev.session_id, is_sidechain=True)
+
+
+def sync_transcripts(conn: sqlite3.Connection) -> int:
+    """Read what was appended to each known transcript since its saved offset.
+
+    A transcript whose size and inode are unchanged is not opened at all.
+    Returns the number of usage records read.
+    """
+    from agentlens.adapters import claude_code_transcript as cct
+
+    total = 0
+    for cur in store.transcript_cursors(conn):
+        if cur["provider"] != cct.PROVIDER:
+            continue
+        try:
+            st = os.stat(cur["path"])
+            if st.st_size == cur["size"] and st.st_ino == cur["inode"]:
+                continue
+        except OSError:
+            pass  # read_new records the error
+        r = cct.read_new(cur["path"], cur["session_id"], cur["offset"], cur["inode"], bool(cur["is_sidechain"]))
+        with conn:
+            if r.records:
+                store.upsert_requests(conn, r.records)
+            store.save_cursor(conn, cur["path"], inode=r.inode, offset=r.offset, size=r.size,
+                              parsed=len(r.records), skipped=r.skipped, error=r.error)
+        total += len(r.records)
+    return total
 
 
 def ingest(wait_s: float = 0.0, batch_files: int = BATCH_FILES) -> IngestResult:
@@ -90,7 +132,7 @@ def ingest(wait_s: float = 0.0, batch_files: int = BATCH_FILES) -> IngestResult:
             return result
         spool.remove_stale_tmp()
         files = spool.pending()
-        if not files:
+        if not files and not paths.db_path().exists():
             return result
         conn = store.connect()
         try:
@@ -107,6 +149,10 @@ def ingest(wait_s: float = 0.0, batch_files: int = BATCH_FILES) -> IngestResult:
                         result.failed += 1
                 if loaded:
                     _insert_files(conn, loaded, result)
+            try:
+                result.requests = sync_transcripts(conn)
+            except Exception as exc:  # noqa: BLE001 - usage is best effort; events are already stored
+                log_error("ingest: transcript sync failed", exc)
         finally:
             conn.close()
     return result

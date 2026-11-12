@@ -56,7 +56,23 @@ def test_wal_and_schema(conn):
 def test_migrate_is_idempotent(conn):
     store.migrate(conn)
     store.connect().close()
-    assert store.schema_version(conn) == 1
+    assert store.schema_version(conn) == store.DB_SCHEMA_VERSION == 2
+
+
+def test_v1_database_migrates_to_v2(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(str(path))
+    old.executescript(store._SCHEMA_V1)
+    old.execute("INSERT INTO meta(key, value) VALUES ('schema_version', '1')")
+    old.commit()
+    old.close()
+    conn = store.connect(path)
+    assert store.schema_version(conn) == 2
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert {"events", "sessions", "api_requests", "transcript_cursors"} <= tables
+    conn.close()
 
 
 def test_refuses_newer_schema(conn):

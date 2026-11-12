@@ -22,7 +22,7 @@ from typing import Iterable
 from agentlens import paths
 from agentlens.events import SCHEMA_VERSION, Event
 
-DB_SCHEMA_VERSION = 1
+DB_SCHEMA_VERSION = 2
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -115,6 +115,56 @@ LEFT JOIN fin USING (provider, session_id, tool_use_id)
 LEFT JOIN den USING (provider, session_id, tool_use_id);
 """
 
+# v2: per-request token usage read incrementally from session transcripts.
+# One row per API request (transcripts repeat a request's usage on several
+# lines). Only counts, model, request id and timestamps; never message content.
+_SCHEMA_V2 = """
+CREATE TABLE IF NOT EXISTS api_requests (
+    provider              TEXT NOT NULL,
+    session_id            TEXT NOT NULL,
+    request_id            TEXT NOT NULL,
+    ts                    REAL NOT NULL,
+    model                 TEXT,
+    is_sidechain          INTEGER NOT NULL DEFAULT 0,
+    input_tokens          INTEGER,
+    cache_read_tokens     INTEGER,
+    cache_write_tokens    INTEGER,
+    cache_write_5m_tokens INTEGER,
+    cache_write_1h_tokens INTEGER,
+    output_tokens         INTEGER,
+    client_version        TEXT,
+    source                TEXT NOT NULL,
+    PRIMARY KEY (provider, session_id, request_id)
+);
+CREATE INDEX IF NOT EXISTS api_requests_session_ts ON api_requests(provider, session_id, ts);
+
+CREATE TABLE IF NOT EXISTS transcript_cursors (
+    path         TEXT PRIMARY KEY,
+    provider     TEXT NOT NULL,
+    session_id   TEXT NOT NULL,
+    is_sidechain INTEGER NOT NULL DEFAULT 0,
+    inode        INTEGER,
+    offset       INTEGER NOT NULL DEFAULT 0,
+    size         INTEGER NOT NULL DEFAULT 0,
+    parsed       INTEGER NOT NULL DEFAULT 0,
+    skipped      INTEGER NOT NULL DEFAULT 0,
+    error        TEXT,
+    updated_at   REAL
+);
+"""
+
+_BACKFILL_CURSORS = """
+INSERT INTO transcript_cursors (path, provider, session_id, is_sidechain)
+SELECT path, provider, session_id, side FROM (
+    SELECT DISTINCT json_extract(data, '$.transcript_path') AS path, provider, session_id, 0 AS side
+    FROM events WHERE json_extract(data, '$.transcript_path') IS NOT NULL
+    UNION
+    SELECT DISTINCT json_extract(data, '$.agent_transcript_path'), provider, session_id, 1
+    FROM events WHERE json_extract(data, '$.agent_transcript_path') IS NOT NULL
+) WHERE true
+ON CONFLICT (path) DO NOTHING
+"""
+
 # ON CONFLICT(event_id) DO NOTHING rather than INSERT OR IGNORE: OR IGNORE would
 # also silently drop rows that violate CHECK / NOT NULL constraints.
 _INSERT_EVENT = """
@@ -194,6 +244,11 @@ def migrate(conn: sqlite3.Connection) -> None:
         )
     if current < 1:
         conn.executescript(_SCHEMA_V1)
+    if current < 2:
+        conn.executescript(_SCHEMA_V2)
+        with conn:  # backfill: transcripts of sessions recorded before v2
+            conn.execute(_BACKFILL_CURSORS)
+    if current < DB_SCHEMA_VERSION:
         with conn:
             conn.execute(
                 "INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', ?)",
@@ -406,3 +461,65 @@ def collectors_seen(conn: sqlite3.Connection, since_ts: float) -> set[str]:
         "SELECT DISTINCT json_extract(data, '$.collector') FROM events WHERE ts >= ?", (since_ts,)
     ).fetchall()
     return {r[0] for r in rows if r[0]}
+
+
+# --------------------------------------------------------- usage (schema v2)
+
+_UPSERT_REQUEST = """
+INSERT INTO api_requests (
+    provider, session_id, request_id, ts, model, is_sidechain, input_tokens,
+    cache_read_tokens, cache_write_tokens, cache_write_5m_tokens, cache_write_1h_tokens,
+    output_tokens, client_version, source
+) VALUES (:provider, :session_id, :request_id, :ts, :model, :is_sidechain, :input_tokens,
+          :cache_read_tokens, :cache_write_tokens, :cache_write_5m_tokens, :cache_write_1h_tokens,
+          :output_tokens, :client_version, :source)
+ON CONFLICT (provider, session_id, request_id) DO UPDATE SET
+    ts = MIN(api_requests.ts, excluded.ts),
+    output_tokens = MAX(COALESCE(api_requests.output_tokens, 0), COALESCE(excluded.output_tokens, 0))
+"""
+
+
+def upsert_requests(conn: sqlite3.Connection, rows: list[dict]) -> None:
+    """Record API requests. A request seen again (split transcript entries, re-read
+    files) keeps its first timestamp and the largest output count; input and
+    cache counts are identical across a request's entries."""
+    conn.executemany(_UPSERT_REQUEST, rows)
+
+
+def register_transcript(conn: sqlite3.Connection, path: str, provider: str, session_id: str,
+                        is_sidechain: bool = False) -> None:
+    conn.execute(
+        "INSERT INTO transcript_cursors (path, provider, session_id, is_sidechain) VALUES (?,?,?,?)"
+        " ON CONFLICT (path) DO NOTHING",
+        (path, provider, session_id, int(is_sidechain)),
+    )
+
+
+def transcript_cursors(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute("SELECT * FROM transcript_cursors").fetchall()
+
+
+def save_cursor(conn: sqlite3.Connection, path: str, *, inode: int | None, offset: int, size: int,
+                parsed: int, skipped: int, error: str | None) -> None:
+    conn.execute(
+        "UPDATE transcript_cursors SET inode=?, offset=?, size=?, parsed=parsed+?, skipped=skipped+?,"
+        " error=?, updated_at=? WHERE path=?",
+        (inode, offset, size, parsed, skipped, error, time.time(), path),
+    )
+
+
+def session_requests(conn: sqlite3.Connection, provider: str, session_id: str,
+                     sidechain: bool | None = False) -> list[sqlite3.Row]:
+    """API requests of one session in time order; ``sidechain=None`` returns all."""
+    sql = "SELECT * FROM api_requests WHERE provider = ? AND session_id = ?"
+    args: list = [provider, session_id]
+    if sidechain is not None:
+        sql += " AND is_sidechain = ?"
+        args.append(int(sidechain))
+    return conn.execute(sql + " ORDER BY ts, request_id", args).fetchall()
+
+
+def session_transcripts(conn: sqlite3.Connection, provider: str, session_id: str) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM transcript_cursors WHERE provider = ? AND session_id = ?", (provider, session_id)
+    ).fetchall()
