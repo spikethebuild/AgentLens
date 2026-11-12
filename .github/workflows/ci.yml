@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:   # reused by release.yml so a release is tested on the same matrix
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: pytest (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install with dev extras
+        run: python -m pip install -e ".[dev]"
+      - name: Run tests
+        run: python -m pytest -q
+
+  stdlib-only:
+    # The hook fast path, ingest and plain CLI must work without the optional TUI extra.
+    name: pytest without the tui extra
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install without extras
+        run: python -m pip install -e . "pytest>=8" "pyyaml>=6"
+      - name: Confirm Textual and Rich are absent
+        run: python -c "import importlib.util as u, sys; sys.exit(any(u.find_spec(m) for m in ('textual', 'rich')))"
+      - name: Run tests (TUI tests skip themselves)
+        run: python -m pytest -q

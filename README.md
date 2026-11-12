@@ -26,15 +26,31 @@ Then run `/reload-plugins` or start a new session. Every session is recorded fro
 
 The plugin's hooks run `hooks/run.sh`, which finds Python 3.10+ (set `AGENTLENS_PYTHON` to choose one), runs the bundled collector and **always exits 0**. If no Python is found, it logs one line to `~/.agentlens/logs/agentlens.log` and does nothing else. Recorded data lives in `~/.agentlens` (or `AGENTLENS_HOME`), so it survives uninstalling or updating the plugin.
 
+### The `agentlens` command (from PyPI)
+
+For the CLI and dashboard in your own terminal. The package is published as **`agentlens-local`** (the name `agentlens` on PyPI belongs to an unrelated project) and installs the `agentlens` command:
+
+```bash
+pipx install 'agentlens-local[tui]'      # or: uv tool install 'agentlens-local[tui]'
+agentlens status
+```
+
+Drop `[tui]` for the standard-library-only CLI. Prefer `pipx` or `uv tool` over a plain `pip install`: both packages provide a Python module called `agentlens`, so they must not share an environment.
+
 ### Fallback: settings hooks
 
-For the CLI and dashboard in your own terminal, or if you don't use plugins:
+If you don't use plugins, let the CLI add hooks to your settings instead:
+
+```bash
+agentlens install      # only if you are NOT using the plugin
+```
+
+From a source checkout instead of PyPI:
 
 ```bash
 git clone https://github.com/SiddharthDevare10/AgentLens && cd AgentLens
 python3 -m venv .venv && .venv/bin/pip install -e '.[tui]'   # or -e . for CLI only
-.venv/bin/agentlens status
-.venv/bin/agentlens install      # only if you are NOT using the plugin
+.venv/bin/agentlens install
 ```
 
 `install` adds hooks to `~/.claude/settings.json` (backup first, atomic write, idempotent). It records the absolute path of the interpreter you run it with; if you move that virtualenv, `agentlens status` reports it as `MISSING`.
@@ -163,7 +179,9 @@ uv venv --python 3.13 .venv && uv pip install --python .venv/bin/python -e '.[de
 .venv/bin/pytest -q
 ```
 
-Tests run with temporary `HOME`, `AGENTLENS_HOME` and `AGENTLENS_CLAUDE_SETTINGS`. A fixture fails any test whose paths resolve outside the sandbox. See `CLAUDE.md` for the full spec and the working rules.
+Tests run with temporary `HOME`, `AGENTLENS_HOME` and `AGENTLENS_CLAUDE_SETTINGS`. A fixture fails any test whose paths resolve outside the sandbox. See `CLAUDE.md` for the full spec and the working rules, and `RELEASING.md` for how releases are cut.
+
+CI (`.github/workflows/ci.yml`) runs the suite on Ubuntu and macOS for Python 3.10–3.14, plus a job without the `tui` extra to keep the core standard-library only.
 
 ## License
 

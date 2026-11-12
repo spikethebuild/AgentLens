@@ -1,0 +1,122 @@
+name: Release
+
+# A `v*` tag publishes to PyPI and creates a GitHub Release.
+# Running this workflow by hand ("Run workflow") rehearses on TestPyPI instead.
+# Publishing uses PyPI Trusted Publishing (OIDC): no API tokens are stored.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    name: Build and smoke-test the distribution
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.x"
+      - name: Check version, tag and changelog agree
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$REF_TYPE" = tag ]; then
+            python scripts/release_tools.py check --tag "$REF_NAME"
+          else
+            python scripts/release_tools.py check
+          fi
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install build twine
+          python -m build
+          python -m twine check --strict dist/*
+      - name: Smoke-test the wheel in a fresh virtualenv
+        run: |
+          python -m venv "$RUNNER_TEMP/smoke"
+          "$RUNNER_TEMP/smoke/bin/pip" install dist/*.whl
+          export AGENTLENS_HOME="$RUNNER_TEMP/agentlens-home"
+          export AGENTLENS_CLAUDE_SETTINGS="$RUNNER_TEMP/claude/settings.json"
+          "$RUNNER_TEMP/smoke/bin/agentlens" --version
+          "$RUNNER_TEMP/smoke/bin/agentlens" status
+          echo '{"session_id":"smoke","hook_event_name":"Stop"}' | "$RUNNER_TEMP/smoke/bin/agentlens" hook claude-code
+          test "$(ls "$AGENTLENS_HOME/spool" | wc -l)" -eq 1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: python-package-distributions
+          path: dist/
+
+  publish-testpypi:
+    name: Rehearse on TestPyPI
+    if: github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/agentlens-local
+    permissions:
+      id-token: write   # Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: python-package-distributions
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
+  publish-pypi:
+    name: Publish to PyPI
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/agentlens-local
+    permissions:
+      id-token: write   # Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: python-package-distributions
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: Create the GitHub Release
+    needs: publish-pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.x"
+      - uses: actions/download-artifact@v8
+        with:
+          name: python-package-distributions
+          path: dist/
+      - name: Release notes from CHANGELOG.md
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: python scripts/release_tools.py notes --tag "$REF_NAME" > "$RUNNER_TEMP/notes.md"
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ github.ref_name }}
+        run: gh release create "$REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "AgentLens ${REF_NAME#v}" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag

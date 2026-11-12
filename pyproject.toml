@@ -1,22 +1,51 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agentlens"
-version = "0.3.0"
-description = "Local-first observability for AI coding agents. Maximum visibility. Minimum token overhead."
+name = "agentlens-local"
+dynamic = ["version"]
+description = "See where your AI coding agent's tokens and prompt cache went. Local-first, zero LLM calls, hooks never block the agent."
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
+authors = [{ name = "Siddharth" }]
+keywords = ["claude-code", "observability", "prompt-cache", "tokens", "hooks", "local-first", "cli"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development",
+    "Topic :: System :: Monitoring",
+]
+# The hook fast path, ingest and the plain CLI use the standard library only.
 dependencies = []
 
 [project.optional-dependencies]
 tui = ["textual>=0.86", "rich>=13"]
-dev = ["pytest>=8", "textual>=0.86", "rich>=13"]
+dev = ["pytest>=8", "textual>=0.86", "rich>=13", "pyyaml>=6"]
+
+[project.urls]
+Homepage = "https://github.com/SiddharthDevare10/AgentLens"
+Issues = "https://github.com/SiddharthDevare10/AgentLens/issues"
+Changelog = "https://github.com/SiddharthDevare10/AgentLens/blob/main/CHANGELOG.md"
 
 [project.scripts]
 agentlens = "agentlens.cli:main"
+
+[tool.setuptools.dynamic]
+# Single version source: src/agentlens/__init__.py
+version = { attr = "agentlens.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
