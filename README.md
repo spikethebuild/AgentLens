@@ -4,7 +4,7 @@
 
 AgentLens is a local-first observability tool for AI coding agents. It records what Claude Code does (sessions, prompts, tool calls, failures, approvals, compactions, model switches, instruction files loaded) through Claude Code's official hooks and stores it in a local SQLite database. It makes **zero LLM calls**, never blocks the agent, and never stores file contents, prompt text or secrets.
 
-> Status: **0.1.1, first release (alpha), not yet published.** Recording (plugin or settings hooks), per-request token usage, the cost coach (`agentlens coach`), the cache report, plan usage in the status line, the `/agentlens` pane inside Claude Code, the CLI and a terminal dashboard work. Until the first release is published, install from a source checkout (see [Install](#install)). Cost in dollars and dismissable suggestions are planned for v0.3, Codex support for v0.5.
+> Status: **0.1.1, first release (alpha), on PyPI as `agentlens-local`.** Recording (plugin or settings hooks), per-request token usage, the cost coach (`agentlens coach`), the cache report, plan usage in the status line, the `/agentlens` pane inside Claude Code, the CLI and a terminal dashboard work. Cost in dollars and dismissable suggestions are planned for v0.3, Codex support for v0.5.
 
 ## What it gives you
 
@@ -30,7 +30,7 @@ These are one project's numbers, not a promise. Savings happen only when you act
 ## Quick start
 
 1. In Claude Code: `/plugin marketplace add spikethebuild/AgentLens`, then `/plugin install agentlens@agentlens`.
-2. In a terminal: `pipx install 'agentlens-local[tui]'` (before the first release: `pip install -e '.[tui]'` in a clone's virtualenv), then `agentlens doctor` (every line should say `ok`).
+2. In a terminal: `pipx install 'agentlens-local[tui]'`, then `agentlens doctor` (every line should say `ok`).
 3. Work as usual. The AgentLens pane opens beside the conversation in new sessions (`/agentlens` closes or reopens it); `/agentlens-dashboard` opens the full dashboard in a Terminal window (macOS), or run `agentlens` in any terminal.
 4. After a few sessions, run `/agentlens:coach` (or `agentlens coach`) to see what is costing you tokens. Optional: `agentlens statusline install` for plan usage in your status bar.
 
