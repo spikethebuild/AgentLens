@@ -152,6 +152,15 @@ Run `agentlens` with no arguments (or `agentlens dashboard`) to open the termina
 
 Every value carries the same `[obs]`/`[calc]`/`[est]`/`[clk]` labels as the CLI. The dashboard never edits Claude Code settings and makes no network calls. Sessions stay in the database after Claude Code exits, so you can review them at any time.
 
+### Open it with every new session (macOS, opt-in)
+
+```
+agentlens dashboard --auto-open on    # run with the agentlens that has the `tui` extra
+agentlens dashboard --auto-open off
+```
+
+When this is on, starting a new Claude Code session opens the dashboard in a new Terminal.app window, behind your editor. It does this only for new sessions (not on resume, `/clear` or compaction), only when no dashboard is already running, and at most once per 15 seconds. It also skips non-interactive runs (`claude -p`, the SDK), using `CLAUDE_CODE_ENTRYPOINT`, which Claude Code doesn't document. The window runs a script at `~/.agentlens/run/dashboard.command` handed to `open -g -a Terminal`, so macOS asks for no Automation permission. It works the same with the plugin and with settings hooks. Skipped launches are logged to `~/.agentlens/logs/agentlens.log`.
+
 ## Commands
 
 | Command | What it does |
@@ -166,7 +175,7 @@ Every value carries the same `[obs]`/`[calc]`/`[est]`/`[clk]` labels as the CLI.
 | `agentlens sessions [--limit N]` | Recent sessions: start, duration, state, prompts, tool calls, failures, tokens in/out. |
 | `agentlens inspect <id-or-prefix> [--all]` | One session in detail: overview (including API requests, input/output tokens and cache hit ratio), tool calls, errors, timeline. |
 | `agentlens cache [session] [--brief] [--requests]` | Cache coach report: hit ratio, misses, causes with evidence, and fixes. |
-| `agentlens` / `agentlens dashboard` | Opens the terminal dashboard (needs the `tui` extra). Without a terminal, prints help. |
+| `agentlens` / `agentlens dashboard [--auto-open on\|off]` | Opens the terminal dashboard (needs the `tui` extra). Without a terminal, prints help. `--auto-open on` (macOS) opens it in a new Terminal window whenever a Claude Code session starts. |
 | `agentlens ingest` | Moves spooled events into the database. Runs automatically before every read. |
 
 ## Where the numbers come from
