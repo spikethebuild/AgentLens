@@ -33,7 +33,7 @@ from agentlens import paths
 MAX_PAYLOAD_BYTES = 4 * 1024 * 1024
 WRAPPED_TIMEOUT_S = 3.0
 WINDOWS = ("five_hour", "seven_day")
-WINDOW_LABEL = {"five_hour": "5h", "seven_day": "wk"}
+WINDOW_LABEL = {"five_hour": "session", "seven_day": "week"}
 WINDOW_SECONDS = {"five_hour": 5 * 3600, "seven_day": 7 * 86400}
 FILE_MODE = 0o600
 

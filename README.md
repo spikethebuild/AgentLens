@@ -101,7 +101,7 @@ agentlens statusline install --dry-run   # see the change to ~/.claude/settings.
 agentlens statusline install
 ```
 
-Your status bar then shows `5h 24% · resets 12:23 · wk 41%`, and the dashboard's **Plan usage** panel shows both windows `[obs]`, when they were reported `[clk]`, and the tokens Claude Code on this machine used in the current 5-hour window `[calc]` (window start = reset time − 5 h).
+Your status bar then shows `session 24% · resets 12:23 · week 41%`, and the dashboard's **Plan usage** panel shows the current session (5-hour) and current week `[obs]` (Anthropic calls the 5-hour limit the "session" limit), when they were reported `[clk]`, and the tokens Claude Code on this machine used in the current 5-hour window `[calc]` (window start = reset time − 5 h).
 
 - **No plan name, no token limit.** Claude Code does not report which plan you are on, and Anthropic does not publish limits as token counts; they are shared with claude.ai and your other devices. AgentLens shows only the percentages Claude Code reports.
 - **Only the windows are kept.** The status line input also carries paths, model and cost; AgentLens reads `session_id`, `cwd` and `rate_limits` and drops the rest. The latest snapshot is `~/.agentlens/plan_usage.json`; a history event is recorded only when a percentage changes.

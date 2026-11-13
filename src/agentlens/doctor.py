@@ -191,7 +191,7 @@ def check_statusline() -> list[Check]:
         except subprocess.TimeoutExpired:
             return [Check(FAIL, "status line", f"took longer than {SMOKE_TIMEOUT_S}s")]
         recorded = Path(env["AGENTLENS_HOME"], "plan_usage.json").exists()
-    if r.returncode == 0 and "5h 12%" in r.stdout and recorded:
+    if r.returncode == 0 and "session 12%" in r.stdout and recorded:
         return [Check(OK, "status line", "agentlens statusline prints plan usage (tested with a sample)")]
     return [Check(FAIL, "status line", f"test run failed: {(r.stderr.strip() or r.stdout.strip())[:160]}",
                   "agentlens statusline install")]

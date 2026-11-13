@@ -316,7 +316,7 @@ def test_home_shows_active_session_and_plan_usage(tmp_path):
         active = " ".join(f"{k} {v}" for k, v, _ in app.screen.active_rows)
         plan = " ".join(f"{k} {v}" for k, v, _ in app.screen.plan_rows)
         assert OTHER[:8] in active and "tokens in 81k" in active and "cache hit" in active
-        assert "24% used" in plan and "tokens this 5h window" in plan
+        assert "24% used" in plan and "tokens this session" in plan
     drive(check, size=(200, 50))
 
 

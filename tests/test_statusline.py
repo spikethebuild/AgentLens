@@ -65,7 +65,7 @@ def test_parse_rejects_missing_or_malformed(bad):
 
 def test_run_prints_line_records_snapshot_and_spools_on_change(monkeypatch, capsys):
     out = run_cli(monkeypatch, capsys, payload())
-    assert out.startswith("5h 24% · resets ") and "wk 41%" in out
+    assert out.startswith("session 24% · resets ") and "week 41%" in out
     snap = statusline.load_snapshot()
     assert snap["windows"]["seven_day"]["used_percentage"] == 41.2
     assert oct(statusline.snapshot_path().stat().st_mode & 0o777) == "0o600"
@@ -101,14 +101,14 @@ def test_no_rate_limits_says_not_reported(monkeypatch, capsys):
 def test_expired_window_is_dropped():
     snap = statusline.parse(payload(five_reset=NOW - 10), NOW - 100)
     assert set(statusline.current_windows(snap, NOW)) == {"seven_day"}
-    assert statusline.render_line(snap, NOW) == "wk 41%"
+    assert statusline.render_line(snap, NOW) == "week 41%"
 
 
 def test_previous_status_line_runs_below(monkeypatch, capsys):
     paths.ensure_dir(paths.home())
     statusline.previous_path().write_text(json.dumps({"statusLine": {"type": "command", "command": "cat >/dev/null; echo mine"}}))
     out = run_cli(monkeypatch, capsys, payload()).splitlines()
-    assert out[0].startswith("5h 24%") and out[1] == "mine"
+    assert out[0].startswith("session 24%") and out[1] == "mine"
 
 
 def test_failing_or_slow_previous_status_line_is_skipped(monkeypatch, capsys):
@@ -117,13 +117,13 @@ def test_failing_or_slow_previous_status_line_is_skipped(monkeypatch, capsys):
     for cmd in ("exit 3", "sleep 5"):
         statusline.previous_path().write_text(json.dumps({"statusLine": {"command": cmd}}))
         out = run_cli(monkeypatch, capsys, payload()).splitlines()
-        assert len(out) == 1 and out[0].startswith("5h")
+        assert len(out) == 1 and out[0].startswith("session")
 
 
 def test_subprocess_fast_path(subprocess_env):
     r = subprocess.run([PY, "-m", "agentlens", "statusline"], input=json.dumps(payload()), env=subprocess_env,
                        capture_output=True, text=True, timeout=30)
-    assert r.returncode == 0 and r.stdout.startswith("5h 24%")
+    assert r.returncode == 0 and r.stdout.startswith("session 24%")
 
 
 # ------------------------------------------------------------ install
@@ -201,10 +201,10 @@ def test_plan_usage_rows():
     assert "not reported yet" in render.plan_usage_rows(None, True, NOW)[0][1]
     snap = statusline.parse(payload(), NOW - 120)
     rows = {k: (v, t) for k, v, t in render.plan_usage_rows(snap, True, NOW, {"requests": 3, "input": 2_100_000, "output": 48_000})}
-    assert rows["5-hour window"][0].startswith("24% used") and rows["5-hour window"][1] == "[obs]"
-    assert rows["weekly window"][0].startswith("41% used")
+    assert rows["current session (5h)"][0].startswith("24% used") and rows["current session (5h)"][1] == "[obs]"
+    assert rows["current week"][0].startswith("41% used")
     assert "2 min ago" in rows["as of"][0] and rows["as of"][1] == "[clk]"
-    assert rows["tokens this 5h window"] == (
+    assert rows["tokens this session"] == (
         "2.10M in / 48k out (this machine)", "[calc]")
     assert not any("limit" in v.lower() and "token" in v.lower() for v, _ in rows.values())
     expired = statusline.parse(payload(five_reset=NOW - 1, week_reset=NOW - 1), NOW - 100)
