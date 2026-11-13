@@ -101,12 +101,39 @@ agentlens statusline install --dry-run   # see the change to ~/.claude/settings.
 agentlens statusline install
 ```
 
-Your status bar then shows `session 24% · resets 12:23 · week 41%`, and the dashboard's **Plan usage** panel shows the current session (5-hour) and current week `[obs]` (Anthropic calls the 5-hour limit the "session" limit), when they were reported `[clk]`, and the tokens Claude Code on this machine used in the current 5-hour window `[calc]` (window start = reset time − 5 h).
+Your status bar then shows two rows:
+
+```
+session 24% · resets 12:23 · week 41%
+Opus · ctx 41% · cache 97% hit, 2 misses (warm, 1h)
+```
+
+The second row (model, context use, prompt-cache hit ratio and misses) comes straight from Claude Code's status line input and is only displayed, never stored; a value Claude Code has not reported yet is left out. The dashboard's the dashboard's **Plan usage** panel shows the current session (5-hour) and current week `[obs]` (Anthropic calls the 5-hour limit the "session" limit), when they were reported `[clk]`, and the tokens Claude Code on this machine used in the current 5-hour window `[calc]` (window start = reset time − 5 h).
 
 - **No plan name, no token limit.** Claude Code does not report which plan you are on, and Anthropic does not publish limits as token counts; they are shared with claude.ai and your other devices. AgentLens shows only the percentages Claude Code reports.
-- **Only the windows are kept.** The status line input also carries paths, model and cost; AgentLens reads `session_id`, `cwd` and `rate_limits` and drops the rest. The latest snapshot is `~/.agentlens/plan_usage.json`; a history event is recorded only when a percentage changes.
+- **Only the windows are kept.** The status line input also carries paths, model and cost; AgentLens stores only `session_id`, `cwd` and `rate_limits`. The latest snapshot is `~/.agentlens/plan_usage.json`; a history event is recorded only when a percentage changes.
 - **Never blanks your status bar.** It always prints a line and exits 0. If you already had a status line, it is saved, runs with the same input below the AgentLens line, and is restored by `agentlens statusline uninstall`.
 - API-key, Team and Enterprise sessions get no `rate_limits`, so the panel says "not reported".
+
+## Inside Claude Code: the `/agentlens` pane
+
+The plugin also ships a pane for Claude Code itself (Claude Code v2.1.287+). Type **`/agentlens`** to open a live panel beside the conversation (or above the prompt in a narrow terminal), and `/agentlens` again to close it:
+
+- **Session:** model, prompts, tool calls and failures.
+- **Tokens:** in (cache read, written, uncached), out, cache hit ratio and API requests, plus context use.
+- **Plan usage:** the current session (5-hour) and week, live from Claude Code (`$.session.usage()`), or from the status line snapshot when that is not available.
+- **Failures** and the most recent events.
+
+It refreshes every 3 seconds and after each turn while open; nothing runs while it is closed. It is read-only: it runs `agentlens pane-data` through the plugin's launcher and never touches a tool call. Claude Code calls this plugin API (a "mod") **early access**, so it may change between releases; recording does not depend on it, and you can turn the plugin's mod off in `/plugin`. `agentlens pane-data [--session ID]` prints the same data as JSON.
+
+## What AgentLens costs in tokens
+
+| Part | Model tokens |
+|---|---|
+| Hooks (recording) | 0: async, no output, nothing added to context |
+| Status line | 0: Claude Code's status line "does not consume API tokens" |
+| `/agentlens` pane, dashboard, CLI | 0: local reads, no model calls |
+| `/agentlens:status`, `/agentlens:cache` skills | 0 until you run one (`disable-model-invocation`); then their 4–5 output lines and Claude's repeat of them enter the conversation, a few hundred tokens per use (estimate) |
 
 ## Dashboard
 
@@ -127,6 +154,8 @@ Every value carries the same `[obs]`/`[calc]`/`[est]`/`[clk]` labels as the CLI.
 | `agentlens status [--scope ...] [--brief]` | Plugin and settings-hook installation (user, project and local scopes), interpreter health, spool and database state, and warnings (double install, `disableAllHooks`). `--brief` prints at most four lines. |
 | `agentlens doctor [--no-hook-test]` | Read-only health check, one line per check (`ok`/`warn`/`FAIL`) with the fix to run. Runs each configured hook command with a test event against a temporary data directory, so your real data is never touched. Exits 1 if any check fails. |
 | `agentlens statusline install\|uninstall [--dry-run]` | Opt-in: makes AgentLens the Claude Code status line to show and record plan usage (5-hour and weekly %). Keeps and restores any status line you had. |
+| `/agentlens` (in Claude Code) | Opens or closes the AgentLens pane beside the conversation (plugin, Claude Code v2.1.287+). |
+| `agentlens pane-data [--session ID]` | The pane's data as one JSON object (tokens, plan usage, failures, recent events) with provenance. |
 | `agentlens sessions [--limit N]` | Recent sessions: start, duration, state, prompts, tool calls, failures, tokens in/out. |
 | `agentlens inspect <id-or-prefix> [--all]` | One session in detail: overview (including API requests, input/output tokens and cache hit ratio), tool calls, errors, timeline. |
 | `agentlens cache [session] [--brief] [--requests]` | Cache coach report: hit ratio, misses, causes with evidence, and fixes. |

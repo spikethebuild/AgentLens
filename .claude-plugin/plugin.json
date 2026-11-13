@@ -2,8 +2,17 @@
   "name": "agentlens",
   "version": "0.1.1",
   "description": "Find out where your coding agent's tokens and cache went, and how to waste less. Local-first, zero LLM calls.",
-  "author": { "name": "Siddharth" },
+  "author": {
+    "name": "Siddharth"
+  },
   "repository": "https://github.com/SiddharthDevare10/AgentLens",
   "license": "MIT",
-  "keywords": ["observability", "prompt-cache", "tokens", "hooks", "local-first"]
+  "keywords": [
+    "observability",
+    "prompt-cache",
+    "tokens",
+    "hooks",
+    "local-first"
+  ],
+  "types": "./types/index.d.ts"
 }

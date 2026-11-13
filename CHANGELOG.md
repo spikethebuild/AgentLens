@@ -46,6 +46,12 @@ First public release, published to PyPI as `agentlens-local`.
   records Claude Code's documented `rate_limits` (5-hour and weekly used %, reset
   times) for Pro/Max/Ultra plans, prints a compact status line, keeps and restores
   an existing status line, never exits non-zero. `status` and `doctor` report it.
+- Status line second row: model, context use and prompt-cache hit ratio/misses
+  from Claude Code's own input (display only, never stored).
+- `/agentlens` pane inside Claude Code (plugin mod, Claude Code v2.1.287+, early
+  access API): live session tokens, cache, plan usage, failures and recent
+  events; read-only, refreshes only while open. `agentlens pane-data` prints the
+  same snapshot as JSON.
 
 ### Changed
 - Version reset from the unpublished 0.3.0 to 0.1.1 to follow the milestone labels.

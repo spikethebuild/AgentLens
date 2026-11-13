@@ -216,5 +216,8 @@
         ]
       }
     ]
-  }
+  },
+  "modules": [
+    "./agentlens-pane.tsx"
+  ]
 }

@@ -333,6 +333,28 @@ def cmd_statusline(args) -> int:
     return 0
 
 
+def cmd_pane_data(args) -> int:
+    """JSON for the AgentLens pane in Claude Code. Always prints one JSON object."""
+    import json
+
+    try:
+        _sync(quiet=True)
+        from agentlens import pane
+
+        conn = store.connect()
+        try:
+            data = pane.snapshot(conn, args.session)
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001 - the pane shows the reason instead
+        from agentlens.errlog import log_error
+
+        log_error("pane-data failed", exc)
+        data = {"schema": 1, "error": f"{type(exc).__name__}: {exc}"[:200]}
+    print(json.dumps(data, separators=(",", ":")))
+    return 0
+
+
 def cmd_doctor(args) -> int:
     from agentlens import doctor
 
@@ -500,6 +522,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--dry-run", action="store_true", help="show the change as a diff; write nothing")
     s.add_argument("--python", help="interpreter the status line should use (default: this one)")
     s.set_defaults(func=cmd_statusline)
+
+    s = sub.add_parser("pane-data", help="JSON snapshot for the AgentLens pane in Claude Code")
+    s.add_argument("--session", help="session ID or prefix (default: the most recent session)")
+    s.set_defaults(func=cmd_pane_data)
 
     s = sub.add_parser("doctor", help="check the installation end to end and print a fix for each problem")
     s.add_argument("--no-hook-test", action="store_true",

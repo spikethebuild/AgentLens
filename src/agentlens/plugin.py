@@ -21,6 +21,7 @@ from agentlens.adapters.claude_code import HOOK_EVENTS
 PLUGIN_NAME = "agentlens"
 HOOK_COMMAND = 'sh "${CLAUDE_PLUGIN_ROOT}/hooks/run.sh" hook claude-code'
 HOOK_TIMEOUT_S = 5
+PANE_MODULE = "./agentlens-pane.tsx"
 NO_TIMEOUT_EVENTS = {"SessionEnd"}  # keep the shared SessionEnd budget at its default
 
 
@@ -35,6 +36,8 @@ def hooks_json() -> dict:
     return {
         "description": "AgentLens: record session, tool and cache events locally (async, never blocks).",
         "hooks": events,
+        # Claude Code v2.1.287+ loads this hooks module (a "mod"): the /agentlens pane.
+        "modules": [PANE_MODULE],
     }
 
 
