@@ -204,10 +204,10 @@ def test_plan_usage_rows():
     assert "not reported yet" in render.plan_usage_rows(None, True, NOW)[0][1]
     snap = statusline.parse(payload(), NOW - 120)
     rows = {k: (v, t) for k, v, t in render.plan_usage_rows(snap, True, NOW, {"requests": 3, "input": 2_100_000, "output": 48_000})}
-    assert rows["current session (5h)"][0].startswith("24% used") and rows["current session (5h)"][1] == "[obs]"
-    assert rows["current week"][0].startswith("41% used")
+    assert rows["5-hour window"][0].startswith("24% used") and rows["5-hour window"][1] == "[obs]"
+    assert rows["weekly window"][0].startswith("41% used")
     assert "2 min ago" in rows["as of"][0] and rows["as of"][1] == "[clk]"
-    assert rows["tokens this session"] == (
+    assert rows["tokens in 5h window"] == (
         "2.10M in / 48k out (this machine)", "[calc]")
     assert not any("limit" in v.lower() and "token" in v.lower() for v, _ in rows.values())
     expired = statusline.parse(payload(five_reset=NOW - 1, week_reset=NOW - 1), NOW - 100)

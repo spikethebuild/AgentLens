@@ -452,7 +452,7 @@ def plan_usage_rows(snap: dict | None, installed: bool, now: float,
             why = "the last reported windows have reset; waiting for Claude Code to report again"
         return [("plan usage", f"{UNAVAILABLE} ({why})", "")]
     rows = []
-    labels = {"five_hour": "current session (5h)", "seven_day": "current week"}
+    labels = {"five_hour": "5-hour window", "seven_day": "weekly window"}
     for name in statusline.WINDOWS:
         w = windows.get(name)
         if w is None:
@@ -464,11 +464,11 @@ def plan_usage_rows(snap: dict | None, installed: bool, now: float,
     rows.append(("as of", f"{fmt_ts(snap['captured_at'], short=True)} ({_ago(age)})", CLK))
     if window_tokens is not None and "five_hour" in windows:
         if window_tokens["requests"]:
-            rows.append(("tokens this session",
+            rows.append(("tokens in 5h window",
                          f"{fmt_tokens(window_tokens['input'])} in / {fmt_tokens(window_tokens['output'])} out "
                          f"(this machine)", CALC))
         else:
-            rows.append(("tokens this session", f"{UNAVAILABLE} (no requests recorded in this window)", ""))
+            rows.append(("tokens in 5h window", f"{UNAVAILABLE} (no requests recorded in this window)", ""))
     return rows
 
 

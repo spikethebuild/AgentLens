@@ -11,10 +11,29 @@ milestones in `CLAUDE.md` (see "Versioning").
   dashboard (Open dashboard / Not now / Don't ask again), through Claude Code's
   own question dialog. Option `askDashboard` (default on) turns it off.
 - The pane's footer names `/agentlens-dashboard`.
+- Dashboard: **Tokens & cache** tab per session (`c`): every main-conversation
+  API request with context, cache read/write, uncached and output tokens, cache
+  misses marked with their cause, and the session's cache and coach findings
+  with their evidence.
+- Dashboard: **Prompts** tab per session (`u`): token use per prompt, largest
+  first (`s` re-sorts by time), with requests, share, peak context, output, tool
+  calls and the largest request. Requests are attributed to the prompt before
+  them by time (`turns.py`). Prompt text only with `capture_prompts`.
+- Dashboard: **Coach** panel on the home screen with the top findings for the
+  selected project (last 14 days).
 
 ### Changed
 - `agentlens dashboard --window` (and `/agentlens-dashboard`) brings Terminal to
   the front when a dashboard is already running, instead of only saying so.
+- Dashboard: sessions under 30 s with no tool calls and no usage are hidden
+  from the list (still counted); `a` shows them.
+- Plan usage labels: "5-hour window" / "weekly window" and "tokens in 5h window"
+  (was "current session (5h)", which read like the Claude Code session).
+- Fix texts no longer suggest starting a new session or `/clear`: long context
+  and compaction point to `/compact` at a task boundary, model switch to keeping
+  one model.
+- Dashboard tiles: "%" moved into the failure-rate title; tool-time call count
+  moved into the title so the subtitle no longer gets cut off.
 
 ## [0.1.1] - 2026-11-13
 

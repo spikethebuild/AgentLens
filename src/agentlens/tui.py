@@ -16,6 +16,7 @@ import sqlite3
 import time
 from typing import Iterable, Sequence
 
+from rich.console import Group
 from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
@@ -37,12 +38,15 @@ from textual.widgets import (
     TabPane,
 )
 
-from agentlens import cache, installer, render, statusline, store
+from agentlens import cache, coach, installer, render, statusline, store, turns
 from agentlens.ingest import ingest
 
 HISTORY_LIMIT = 1000  # sessions loaded into the explorer
 FEED_LIMIT = 200      # rows kept in the live activity feed
 LIVE_INTERVAL_S = 1.0
+SHORT_SESSION_S = 30   # sessions shorter than this with no tool calls or usage are hidden by default
+COACH_REFRESH_S = 60   # how often the home Coach panel is recomputed while new events arrive
+COACH_SHOWN = 4        # findings listed in the home Coach panel
 
 # Pastel violet palette. Status colours are reserved for status and always
 # paired with an icon and a word, never colour alone.
@@ -111,7 +115,9 @@ Screen {{ background: {BG}; color: {TEXT}; }}
 #filter {{ display: none; background: {SURFACE}; border: round {LINE_HI}; color: {TEXT}; height: 3; }}
 #filter.-visible {{ display: block; }}
 
-#feed-panel {{ height: 2fr; min-height: 6; }}
+#bottom {{ height: 2fr; min-height: 6; }}
+#feed-panel {{ width: 3fr; }}
+#coach-panel {{ width: 2fr; }}
 
 DataTable {{ background: {BG}; color: {TEXT}; scrollbar-size-vertical: 1; }}
 DataTable > .datatable--header {{ background: {BG}; color: {MUTED}; text-style: bold; }}
@@ -133,6 +139,10 @@ Underline > .underline--bar {{ color: {VIOLET}; background: {LINE}; }}
 .detail-panel {{ height: 2fr; }}
 #overview-panel {{ height: 1fr; }}
 #timeline-panel {{ height: 1fr; }}
+#cache-panel {{ height: 1fr; max-height: 16; }}
+#cache-detail-panel {{ height: 2fr; }}
+#prompts-panel {{ height: 1fr; max-height: 16; }}
+#prompt-detail-panel {{ height: 2fr; }}
 
 Footer {{ background: {SURFACE}; }}
 """
@@ -229,6 +239,34 @@ def clock(ts: float | None) -> str:
     return render.fmt_ts(ts, short=True)[6:] if ts is not None else render.UNAVAILABLE
 
 
+def is_short(s: sqlite3.Row) -> bool:
+    """A session too small to be worth a row by default: not active, no tool calls,
+    no recorded usage and under SHORT_SESSION_S from first to last event (e.g. a
+    quick `claude -p` run). Hidden from the list, never from the counts."""
+    if render.is_active(s) or s["tool_calls"] or s["api_requests"]:
+        return False
+    first, last = s["first_seen"], s["last_seen"]
+    return first is not None and last is not None and last - first < SHORT_SESSION_S
+
+
+def finding_text(f, evidence_lines: int = 1) -> Text:
+    """A coach or cache finding: title, impact, cited evidence and fix, shown literally."""
+    warn = f.severity == "warn"
+    t = Text()
+    t.append("▲ " if warn else "· ", style=PEACH if warn else MUTED)
+    t.append(f.title, style=f"bold {TEXT}")
+    if f.impact:
+        t.append("\n  " + f.impact, style=MUTED)
+    shown = f.evidence[:evidence_lines]
+    for ev in shown:
+        t.append("\n  evidence: " + ev, style=DIM)
+    if len(f.evidence) > len(shown):
+        t.append(f" (+{len(f.evidence) - len(shown)} more)", style=DIM)
+    if f.fix:
+        t.append("\n  fix: " + f.fix, style=LAVENDER)
+    return t
+
+
 def session_key(provider: str, session_id: str) -> str:
     return f"{provider}\x1f{session_id}"
 
@@ -290,8 +328,10 @@ class Tile(Vertical):
         self.border_title = escape(self.label)
         self.border_subtitle = escape(self.tag)
 
-    def set(self, value: str, unit: str = "", tone: str = "") -> None:
+    def set(self, value: str, unit: str = "", tone: str = "", title: str | None = None) -> None:
         self.value = value
+        if title is not None:
+            self.border_title = escape(title)
         self.query_one(Digits).update(value)
         if value == "-":
             self.border_subtitle = escape(render.UNAVAILABLE)
@@ -314,6 +354,7 @@ class SessionsScreen(Screen):
     BINDINGS = [
         Binding("slash", "focus_filter", "Filter"),
         Binding("f", "toggle_failed", "Failures only"),
+        Binding("a", "toggle_short", "Show short"),
         Binding("question_mark", "toggle_legend", "Legend"),
         Binding("escape", "clear_filter", "Clear filter", show=False),
     ]
@@ -329,7 +370,12 @@ class SessionsScreen(Screen):
         self.sessions: list[sqlite3.Row] = []
         self.project: str | None = None  # None = all projects
         self.failed_only = False
+        self.show_short = False
         self.query_text = ""
+        # Coach panel: report for (project), recomputed at most every COACH_REFRESH_S
+        self.coach_report: coach.CoachReport | None = None
+        self.coach_error: str | None = None
+        self._coach_key: tuple[str | None, float] | None = None
         self._project_keys: list[str | None] = []
         self.feed_rowid = 0
         # what the usage panels currently show (kv rows)
@@ -343,7 +389,7 @@ class SessionsScreen(Screen):
             yield Tile("Active now", "[calc]", id="t-open")
             yield Tile("Tool calls", "[calc]", id="t-tools")
             yield Tile("Failed", "[calc]", id="t-failed")
-            yield Tile("Failure rate", "[calc]", id="t-rate")
+            yield Tile("Failure rate %", "[calc]", id="t-rate")
             yield Tile("Avg tool time", "[calc]", id="t-avg")
         with Horizontal(id="usage"):
             with VerticalScroll(id="active-panel", classes="panel"):
@@ -356,8 +402,11 @@ class SessionsScreen(Screen):
             with Vertical(id="sessions-panel", classes="panel"):
                 yield Input(placeholder="type to filter by id, project, model or state · esc clears", id="filter")
                 yield DataTable(id="sessions", cursor_type="row")
-        with Vertical(id="feed-panel", classes="panel"):
-            yield DataTable(id="feed", cursor_type="row", show_header=False)
+        with Horizontal(id="bottom"):
+            with Vertical(id="feed-panel", classes="panel"):
+                yield DataTable(id="feed", cursor_type="row", show_header=False)
+            with VerticalScroll(id="coach-panel", classes="panel"):
+                yield Static(id="coach-body")
         yield legend()
         yield Footer()
 
@@ -370,6 +419,7 @@ class SessionsScreen(Screen):
         feed_panel = self.query_one("#feed-panel")
         feed_panel.border_title = "Live activity"
         feed_panel.border_subtitle = escape("times [clk] · enter opens the session")
+        self.query_one("#coach-panel").border_title = "Coach · where tokens go"
         _add_columns(self.query_one("#sessions", DataTable), self.COLUMNS)
         _add_columns(self.query_one("#feed", DataTable), self.FEED_COLUMNS)
         self._append_feed(store.recent_events(self.app.conn, 50))
@@ -391,7 +441,43 @@ class SessionsScreen(Screen):
         self._refresh_table()
         self._refresh_tiles()
         self._refresh_usage()
+        self._refresh_coach()
         self._refresh_title()
+
+    def _refresh_coach(self, force: bool = False) -> None:
+        """Deterministic coach findings for the selected project (last DEFAULT_DAYS days)."""
+        now = time.time()
+        stale = (self._coach_key is None or self._coach_key[0] != self.project
+                 or now - self._coach_key[1] >= COACH_REFRESH_S)
+        if force or stale:
+            self._coach_key = (self.project, now)
+            try:
+                self.coach_report = coach.analyze(self.app.conn, self.project, now=now)
+                self.coach_error = None
+            except Exception as exc:  # noqa: BLE001 - the panel must not take the dashboard down
+                from agentlens.errlog import log_error
+
+                log_error("tui: coach failed", exc)
+                self.coach_report, self.coach_error = None, str(exc)[:80]
+        panel = self.query_one("#coach-panel")
+        body = self.query_one("#coach-body", Static)
+        rep = self.coach_report
+        if rep is None:
+            body.update(Text(f"{render.UNAVAILABLE} ({self.coach_error or 'not computed yet'})", style=PEACH))
+            return
+        panel.border_subtitle = escape(f"{rep.scope} · more: agentlens coach")
+        if not rep.findings:
+            body.update(Text(f"✓ No findings across {len(rep.sessions)} sessions and "
+                             f"{rep.requests} API requests.", style=MINT))
+            return
+        out = Text()
+        for i, f in enumerate(rep.findings[:COACH_SHOWN]):
+            if i:
+                out.append("\n\n")
+            out.append_text(finding_text(f))
+        if len(rep.findings) > COACH_SHOWN:
+            out.append(f"\n\n+{len(rep.findings) - COACH_SHOWN} more: run `agentlens coach`", style=DIM)
+        body.update(out)
 
     def active_session(self) -> sqlite3.Row | None:
         """The most recent active session (no SessionEnd, events within the hour) in the project."""
@@ -447,6 +533,8 @@ class SessionsScreen(Screen):
         for s in self._in_project():
             if self.failed_only and not s["tool_failures"]:
                 continue
+            if not self.show_short and not words and is_short(s):
+                continue
             if words:
                 hay = " ".join(
                     str(x or "") for x in (
@@ -470,7 +558,7 @@ class SessionsScreen(Screen):
         self.query_one("#t-failed", Tile).set(str(n_failed), tone="bad" if n_failed else "muted")
         rate = self.query_one("#t-rate", Tile)
         if n_tools:
-            rate.set(f"{100 * n_failed / n_tools:.0f}", "%", tone="bad" if n_failed else "")
+            rate.set(f"{100 * n_failed / n_tools:.0f}", tone="bad" if n_failed else "")
         else:
             rate.set("-")
         stats = store.tool_time_stats(self.app.conn, self.project)
@@ -496,6 +584,9 @@ class SessionsScreen(Screen):
         panel = self.query_one("#sessions-panel")
         shown, total = len(rows), len(self._in_project())
         bits = [f"{shown} of {total}" if shown != total else f"{total}"]
+        hidden = 0 if self.show_short else sum(1 for s in self._in_project() if is_short(s))
+        if hidden and not self.query_text:
+            bits.append(f"{hidden} short hidden · a shows")
         if self.failed_only:
             bits.append("failures only")
         if self.query_text:
@@ -604,6 +695,10 @@ class SessionsScreen(Screen):
         f.remove_class("-visible")
         self.query_one("#sessions", DataTable).focus()
 
+    def action_toggle_short(self) -> None:
+        self.show_short = not self.show_short
+        self._refresh_table()
+
     def action_toggle_failed(self) -> None:
         self.failed_only = not self.failed_only
         self._refresh_table()
@@ -622,6 +717,9 @@ class SessionScreen(Screen):
         Binding("escape", "back", "Back"),
         Binding("e", "tab('errors')", "Errors"),
         Binding("t", "tab('tools')", "Tool calls"),
+        Binding("c", "tab('cache')", "Tokens & cache"),
+        Binding("u", "tab('prompts')", "Prompts"),
+        Binding("s", "sort_prompts", "Sort prompts", show=False),
         Binding("l", "tab('timeline')", "Timeline"),
         Binding("o", "tab('overview')", "Overview"),
         Binding("question_mark", "toggle_legend", "Legend"),
@@ -640,6 +738,16 @@ class SessionScreen(Screen):
         # what the detail panels currently show (kv rows)
         self.tool_detail_rows: list[tuple[str, str, str]] = []
         self.error_detail_rows: list[tuple[str, str, str]] = []
+        # Tokens & cache tab: cache report + this session's coach findings, rebuilt when requests change
+        self.cache_report: cache.Report | None = None
+        self.session_findings: list = []
+        self.cache_detail_rows: list[tuple[str, str, str]] = []
+        self._cache_requests = -1
+        # Prompts tab: token use per prompt, largest first (s toggles time order)
+        self.turns: list[turns.Turn] = []
+        self.prompts_by_time = False
+        self.prompt_detail_rows: list[tuple[str, str, str]] = []
+        self._turns_key: tuple[int, int] | None = None
 
     def _load(self) -> list[sqlite3.Row]:
         """(Re)load the session and calls; return events not seen yet."""
@@ -678,6 +786,16 @@ class SessionScreen(Screen):
                     yield DataTable(id="tools-table", cursor_type="row")
                 with VerticalScroll(classes="panel detail-panel", id="tool-detail-panel"):
                     yield Static(id="tool-detail")
+            with TabPane("Tokens & cache", id="cache"):
+                with Vertical(classes="panel", id="cache-panel"):
+                    yield DataTable(id="cache-table", cursor_type="row")
+                with VerticalScroll(classes="panel", id="cache-detail-panel"):
+                    yield Static(id="cache-detail")
+            with TabPane("Prompts", id="prompts"):
+                with Vertical(classes="panel", id="prompts-panel"):
+                    yield DataTable(id="prompts-table", cursor_type="row")
+                with VerticalScroll(classes="panel", id="prompt-detail-panel"):
+                    yield Static(id="prompt-detail")
             with TabPane("Timeline", id="timeline"):
                 with Vertical(classes="panel", id="timeline-panel"):
                     yield DataTable(id="timeline-table", cursor_type="row")
@@ -692,6 +810,12 @@ class SessionScreen(Screen):
         _add_columns(self.query_one("#tools-table", DataTable),
                      ["TIME [clk]", "TOOL", "STATUS", "DURATION", "INPUT (sanitized)"])
         _add_columns(self.query_one("#timeline-table", DataTable), ["TIME [clk]", "EVENT", "DETAIL"])
+        _add_columns(self.query_one("#cache-table", DataTable), self.CACHE_COLUMNS)
+        self.query_one("#cache-panel").border_title = "Main-conversation API requests"
+        self.query_one("#cache-detail-panel").border_title = "Request and findings"
+        _add_columns(self.query_one("#prompts-table", DataTable), self.PROMPT_COLUMNS)
+        self.query_one("#prompts-panel").border_title = "Token use by prompt"
+        self.query_one("#prompt-detail-panel").border_title = "Selected prompt"
         self.query_one("#errors-panel").border_title = "Failures"
         self.query_one("#error-detail-panel").border_title = "Details"
         self.query_one("#tools-panel").border_title = "Tool calls"
@@ -703,6 +827,11 @@ class SessionScreen(Screen):
         self._focus_tab(self.query_one(TabbedContent).active)
 
     # rendering ----------------------------------------------------------
+
+    PROMPT_COLUMNS = ["#", "TIME [clk]", "PROMPT", "REQUESTS [obs]", "TOKENS IN [obs]", "SHARE [calc]",
+                      "PEAK CONTEXT [calc]", "OUTPUT [obs]", "TOOLS"]
+    CACHE_COLUMNS = ["TIME [clk]", "CONTEXT [calc]", "CACHE READ [obs]", "CACHE WRITE [obs]",
+                     "UNCACHED [obs]", "OUTPUT [obs]", "NOTE"]
 
     def _refresh_title(self) -> None:
         s = self.session
@@ -732,7 +861,8 @@ class SessionScreen(Screen):
         self.query_one("#t-prompts", Tile).set(str(s["prompts"]))
         timed = [c["duration_ms"] for c in self.calls if c["duration_ms"] is not None]
         value, unit = split_duration(sum(timed) if timed else None)
-        self.query_one("#t-tooltime", Tile).set(value, f"{unit} · sum of {len(timed)}" if timed else "")
+        self.query_one("#t-tooltime", Tile).set(
+            value, unit, title=f"Tool time · {len(timed)} calls" if timed else "Tool time")
         if self.usage.get("requests"):
             value, unit = split_tokens(self.usage["input"])
             out = render.fmt_tokens(self.usage["output"])
@@ -752,6 +882,8 @@ class SessionScreen(Screen):
         )
         self._fill_tools()
         self._fill_errors()
+        self._fill_cache()
+        self._fill_prompts()
         n_err = len(render.error_events(self.events))
         tabs = self.query_one(TabbedContent)
         tabs.get_tab("errors").label = Text.assemble(
@@ -759,6 +891,13 @@ class SessionScreen(Screen):
         )
         tabs.get_tab("tools").label = Text.assemble("Tool calls ", (str(len(self.calls)), DIM))
         tabs.get_tab("timeline").label = Text.assemble("Timeline ", (str(len(self.events)), DIM))
+        tabs.get_tab("prompts").label = Text.assemble("Prompts ", (str(sum(1 for t in self.turns if t.index)), DIM))
+        rep = self.cache_report
+        n_miss = len(rep.misses) if rep else 0
+        tabs.get_tab("cache").label = Text.assemble(
+            "Tokens & cache ", (str(len(rep.requests) if rep else 0), DIM),
+            (f" {n_miss} ✗" if n_miss else "", f"bold {ROSE}"),
+        )
 
     def _fill_tools(self) -> None:
         rows = []
@@ -806,6 +945,169 @@ class SessionScreen(Screen):
         if follow and table.row_count:
             table.move_cursor(row=table.row_count - 1, animate=False)
 
+    def _fill_cache(self) -> None:
+        """Per-request tokens with cache misses marked; rebuilt only when the request count changes."""
+        s = self.session
+        if s is None or self.usage.get("requests", 0) == self._cache_requests:
+            return
+        self._cache_requests = self.usage.get("requests", 0)
+        conn = self.app.conn
+        self.cache_report = cache.analyze(conn, s)
+        try:
+            crep = coach.analyze(conn, s["project"], session_prefix=self.session_id)
+            # cache warnings are already in the cache report; keep the coach's own rules
+            self.session_findings = list(self.cache_report.findings) + [
+                f for f in crep.findings if not f.rule.startswith("cache:")]
+        except Exception as exc:  # noqa: BLE001 - findings are optional; the table still shows
+            from agentlens.errlog import log_error
+
+            log_error("tui: session coach failed", exc)
+            self.session_findings = list(self.cache_report.findings)
+        misses = {m.request["request_id"]: m for m in self.cache_report.misses}
+        rows = []
+        for i, r in enumerate(self.cache_report.requests):
+            parts = [r["cache_read_tokens"], r["cache_write_tokens"], r["input_tokens"]]
+            ctx = sum(parts) if all(v is not None for v in parts) else None
+            m = misses.get(r["request_id"])
+            if m is not None:
+                note = Text(f"✗ miss · {m.cause} · {render.fmt_tokens(m.shortfall)} re-written", style=ROSE)
+            elif i == 0:
+                note = Text("first request: cache built", style=DIM)
+            else:
+                note = Text("")
+            fmt = lambda v: tagged(render.fmt_tokens(v) if v is not None else render.UNAVAILABLE)  # noqa: E731
+            rows.append((r["request_id"], [
+                Text(clock(r["ts"]), style=DIM),
+                Text(render.fmt_tokens(ctx), style=f"bold {TEXT}") if ctx is not None else fmt(None),
+                fmt(r["cache_read_tokens"]), fmt(r["cache_write_tokens"]), fmt(r["input_tokens"]),
+                fmt(r["output_tokens"]), note,
+            ]))
+        table = self.query_one("#cache-table", DataTable)
+        _set_rows(table, rows)
+        rep = self.cache_report
+        bits = [f"hit ratio {rep.hit_ratio:.1%} [calc]" if rep.hit_ratio is not None
+                else f"hit ratio {render.UNAVAILABLE}", f"TTL {rep.ttl}", f"{len(rep.misses)} misses"]
+        if rep.subagent_requests:
+            bits.append(f"+{rep.subagent_requests} subagent requests not listed")
+        self.query_one("#cache-panel").border_subtitle = escape(" · ".join(bits))
+        self._show_request(table.cursor_row)
+
+    def _fill_prompts(self, force: bool = False) -> None:
+        """Turns ranked by tokens in; rebuilt when requests or events change."""
+        key = (self.usage.get("requests", 0), len(self.events))
+        if not force and key == self._turns_key:
+            return
+        self._turns_key = key
+        self.turns = turns.session_turns(self.app.conn, self.provider, self.session_id, self.events)
+        total = sum(t.tokens_in for t in self.turns)
+        ordered = self.turns if self.prompts_by_time else sorted(self.turns, key=lambda t: -t.tokens_in)
+        rows = []
+        for t in ordered:
+            has = bool(t.all_requests)
+            share = t.tokens_in / total if total and has else None
+            tools = sum(t.tools.values())
+            rows.append((f"turn{t.index}", [
+                Text(str(t.index) if t.index else "–", style=DIM),
+                Text(clock(t.start), style=DIM),
+                Text(t.prompt_label(50), style=TEXT if t.prompt_text else MUTED),
+                Text(str(len(t.all_requests))),
+                Text(render.fmt_tokens(t.tokens_in), style=f"bold {TEXT}") if has else Text(render.UNAVAILABLE, style=DIM),
+                Text(f"{share:.0%}", style=PEACH if share >= 0.25 else TEXT) if share is not None else Text("·", style=DIM),
+                Text(render.fmt_tokens(t.peak_context)) if t.peak_context is not None else Text("·", style=DIM),
+                Text(render.fmt_tokens(t.output)) if has else Text("·", style=DIM),
+                Text(f"{tools}" + (f" ({t.failures} ✗)" if t.failures else ""), style=ROSE if t.failures else TEXT),
+            ]))
+        table = self.query_one("#prompts-table", DataTable)
+        _set_rows(table, rows)
+        panel = self.query_one("#prompts-panel")
+        order = "time order" if self.prompts_by_time else "largest first"
+        text_note = "" if any(t.prompt_text for t in self.turns) else " · prompt text off (capture_prompts)"
+        panel.border_subtitle = escape(f"{order} · s re-sorts · by time [calc]{text_note}")
+        self._show_prompt(table.cursor_row)
+
+    def _show_prompt(self, idx: int) -> None:
+        table = self.query_one("#prompts-table", DataTable)
+        detail = self.query_one("#prompt-detail", Static)
+        keys = [k.value for k in table.rows]
+        if not 0 <= idx < len(keys):
+            self.prompt_detail_rows = []
+            detail.update(Text(f"{render.UNAVAILABLE} (no prompts or API requests recorded)", style=PEACH))
+            return
+        t = next(t for t in self.turns if f"turn{t.index}" == keys[idx])
+        biggest = max(t.all_requests, key=lambda r: turns._ctx(r) or 0, default=None)
+        rows = [
+            ("prompt", t.prompt_text or t.prompt_label(), render.OBS if t.prompt_text or t.prompt_chars else ""),
+            ("window", f"{render.fmt_ts(t.start)} → " + (render.fmt_ts(t.end) if t.end else "now / session end"),
+             render.CLK),
+            ("requests", f"{len(t.requests)} main + {len(t.sub_requests)} subagent", render.OBS),
+            ("tokens in", f"{render.fmt_tokens(t.tokens_in)} (cache written {render.fmt_tokens(t.cache_write)})",
+             render.OBS),
+            ("output", render.fmt_tokens(t.output), render.OBS),
+            ("tool calls", ", ".join(f"{k} {v}" for k, v in sorted(t.tools.items(), key=lambda kv: -kv[1]))
+             or "none", render.CALC),
+        ]
+        if t.failures:
+            rows.append(("failed tool calls", str(t.failures), render.CALC))
+        if biggest is not None:
+            rows.append(("largest request", f"{biggest['request_id']} · {render.fmt_tokens(turns._ctx(biggest))} "
+                                            f"context at {clock(biggest['ts'])}", render.OBS))
+        if t.prompt_event:
+            rows.append(("evidence", f"event {t.prompt_event[:12]} (prompt.submit)", ""))
+        if not t.prompt_text and t.index:
+            rows.append(("text", "not stored; opt in with {\"capture_prompts\": true} in ~/.agentlens/config.json "
+                                 "(applies to new prompts)", ""))
+        self.prompt_detail_rows = rows
+        detail.update(kv_table(rows))
+
+    def action_sort_prompts(self) -> None:
+        self.prompts_by_time = not self.prompts_by_time
+        self._fill_prompts(force=True)
+
+    def _show_request(self, idx: int) -> None:
+        rep = self.cache_report
+        out = Text()
+        rows: list[tuple[str, str, str]] = []
+        if rep is None or not rep.requests:
+            why = (rep.usage_status if rep else "") or "no per-request usage recorded"
+            out.append(f"{render.UNAVAILABLE} ({why})", style=PEACH)
+        elif 0 <= idx < len(rep.requests):
+            r = rep.requests[idx]
+            rows = [
+                ("request id", r["request_id"], render.OBS),
+                ("time", render.fmt_ts(r["ts"]), render.OBS),
+                ("model", r["model"] or render.UNAVAILABLE, render.OBS if r["model"] else ""),
+                ("cache write 5m / 1h",
+                 f"{render.fmt_tokens(r['cache_write_5m_tokens'])} / {render.fmt_tokens(r['cache_write_1h_tokens'])}"
+                 if r["cache_write_5m_tokens"] is not None or r["cache_write_1h_tokens"] is not None
+                 else render.UNAVAILABLE, render.OBS),
+            ]
+            m = next((m for m in rep.misses if m.request["request_id"] == r["request_id"]), None)
+            if m is not None:
+                rows += [
+                    ("cache miss", f"{m.cause} · expected ≥ {render.fmt_tokens(m.expected)} read, "
+                                   f"{render.fmt_tokens(m.shortfall)} re-written", render.CALC),
+                    *[("evidence", ev, "") for ev in m.evidence],
+                ]
+        self.cache_detail_rows = rows
+        detail = self.query_one("#cache-detail", Static)
+        if rows:
+            detail.update(Group(kv_table(rows), Text(""), self._findings_text()))
+        else:
+            out.append("\n\n")
+            out.append_text(self._findings_text())
+            detail.update(out)
+
+    def _findings_text(self) -> Text:
+        t = Text()
+        t.append("Findings for this session\n", style=f"bold {VIOLET}")
+        if not self.session_findings:
+            t.append("✓ nothing to fix in this session", style=MINT)
+        for i, f in enumerate(self.session_findings):
+            if i:
+                t.append("\n")
+            t.append_text(finding_text(f, evidence_lines=3))
+        return t
+
     def _call_for(self, tool_use_id: str | None) -> sqlite3.Row | None:
         return next((c for c in self.calls if tool_use_id and c["tool_use_id"] == tool_use_id), None)
 
@@ -839,7 +1141,8 @@ class SessionScreen(Screen):
         self.query_one("#error-detail", Static).update(kv_table(rows))
 
     def _focus_tab(self, tab: str) -> None:
-        target = {"errors": "#errors-table", "tools": "#tools-table", "timeline": "#timeline-table"}.get(tab)
+        target = {"errors": "#errors-table", "tools": "#tools-table", "timeline": "#timeline-table",
+                  "cache": "#cache-table", "prompts": "#prompts-table"}.get(tab)
         if target:
             self.query_one(target, DataTable).focus()
 
@@ -857,6 +1160,10 @@ class SessionScreen(Screen):
             self._show_tool(event.cursor_row)
         elif event.data_table.id == "errors-table":
             self._show_error(event.cursor_row)
+        elif event.data_table.id == "cache-table":
+            self._show_request(event.cursor_row)
+        elif event.data_table.id == "prompts-table":
+            self._show_prompt(event.cursor_row)
 
     def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
         self._focus_tab(event.pane.id or "")

@@ -12,7 +12,7 @@ pytest.importorskip("textual")
 
 from conftest import load_fixture  # noqa: E402
 
-from agentlens import cli, paths, spool, store  # noqa: E402
+from agentlens import cache, cli, paths, spool, store  # noqa: E402
 from agentlens.adapters.claude_code import normalize  # noqa: E402
 from agentlens.tui import AgentLensApp, SessionScreen, SessionsScreen  # noqa: E402
 
@@ -231,11 +231,12 @@ def test_live_sync_shows_new_sessions_and_events_ingested_elsewhere():
         table = app.screen.query_one("#sessions")
         assert table.row_count == 1
         # another process ingested this already: only the DB changed
-        seed(events_for(["session_start"], session_id=OTHER, t0=T0 + 500))
+        new = ["session_start", "pre_tool_use_bash", "post_tool_use_bash"]
+        seed(events_for(new, session_id=OTHER, t0=T0 + 500))
         await app.sync()
         await pilot.pause()
         assert table.row_count == 2
-        assert app.screen.query_one("#feed").row_count == len(events_for(SEQUENCE)) + 1
+        assert app.screen.query_one("#feed").row_count == len(events_for(SEQUENCE)) + len(events_for(new))
 
     drive(check)
 
@@ -316,7 +317,7 @@ def test_home_shows_active_session_and_plan_usage(tmp_path):
         active = " ".join(f"{k} {v}" for k, v, _ in app.screen.active_rows)
         plan = " ".join(f"{k} {v}" for k, v, _ in app.screen.plan_rows)
         assert OTHER[:8] in active and "tokens in 81k" in active and "cache hit" in active
-        assert "24% used" in plan and "tokens this session" in plan
+        assert "24% used" in plan and "tokens in 5h window" in plan
     drive(check, size=(200, 50))
 
 
@@ -325,3 +326,157 @@ def test_home_usage_panels_when_nothing_is_available():
         assert "no active session" in app.screen.active_rows[0][1]
         assert "agentlens statusline install" in app.screen.plan_rows[0][1]
     drive(check)
+
+
+# ------------------------------------------------ v0.2 review: short sessions, coach, tokens & cache
+
+
+def test_short_empty_sessions_are_hidden_until_a():
+    seed(events_for(SEQUENCE),
+         events_for(["session_start", "session_end"], session_id=OTHER, t0=T0 + 500))
+
+    async def check(app, pilot):
+        table = app.screen.query_one("#sessions")
+        assert [r[0] for r in cell_texts(table)] == [SID[:8]]
+        assert "1 short hidden · a shows" in str(app.screen.query_one("#sessions-panel").border_subtitle)
+        tiles = {t.id: t.value for t in app.screen.query("Tile")}
+        assert tiles["t-sessions"] == "2"  # hidden from the list, never from the counts
+        table.focus()
+        await pilot.press("a")
+        assert table.row_count == 2
+        await pilot.press("a")
+        assert table.row_count == 1
+
+    drive(check)
+
+
+def test_failure_rate_tile_puts_percent_in_its_title():
+    seed(events_for(SEQUENCE))
+
+    async def check(app, pilot):
+        rate = app.screen.query_one("#t-rate")
+        assert rate.value == "33" and "%" in str(rate.border_title)
+
+    drive(check)
+
+
+def _usage_session(tmp_path, sid=OTHER, cwd=None):
+    """A session with a transcript: request r3 loses the cache after a compaction."""
+    from agentlens.ingest import ingest
+    from transcripts import request_lines, write
+
+    lines = (request_lines("r1", T0 + 10, read=0, write=40_000, session_id=sid)
+             + request_lines("r2", T0 + 20, read=40_000, write=500, session_id=sid)
+             + request_lines("r3", T0 + 40, read=0, write=12_000, session_id=sid))
+    path = write(tmp_path / "t.jsonl", lines)
+    start = copy.deepcopy(load_fixture("session_start"))
+    start.update(session_id=sid, transcript_path=str(path))
+    if cwd:
+        start["cwd"] = cwd
+    pre = copy.deepcopy(load_fixture("pre_compact"))
+    pre.update(session_id=sid)
+    post = copy.deepcopy(load_fixture("post_compact"))
+    post.update(session_id=sid)
+    spool.write_events(normalize(start, T0) + normalize(pre, T0 + 25) + normalize(post, T0 + 30))
+    ingest()
+
+
+def test_session_tokens_and_cache_tab_marks_misses_with_evidence(tmp_path):
+    _usage_session(tmp_path)
+
+    async def check(app, pilot):
+        await open_session(app, pilot, OTHER[:8])
+        screen = app.screen
+        assert isinstance(screen, SessionScreen)
+        await pilot.press("c")
+        await pilot.pause()
+        table = screen.query_one("#cache-table")
+        rows = cell_texts(table)
+        assert [r[1] for r in rows] == ["40k", "41k", "12k"]
+        assert rows[0][6] == "first request: cache built"
+        assert rows[2][6].startswith("✗ miss · compaction")
+        assert "CONTEXT [calc]" in [str(c.label) for c in table.columns.values()]
+        assert "1 ✗" in str(screen.query_one("TabbedContent").get_tab("cache").label)
+        table.move_cursor(row=2)
+        await pilot.pause()
+        detail = dict((k, v) for k, v, _ in screen.cache_detail_rows)
+        assert detail["request id"] == "r3" and "compaction" in detail["cache miss"]
+        assert any(k == "evidence" for k, _, _ in screen.cache_detail_rows)
+        assert any(f.rule == "compaction" or "compact" in f.title.lower() for f in screen.session_findings)
+
+    drive(check, size=(200, 50))
+
+
+def test_session_without_usage_explains_why(tmp_path):
+    seed(events_for(SEQUENCE))
+
+    async def check(app, pilot):
+        await open_session(app, pilot, SID[:8])
+        await pilot.press("c")
+        await pilot.pause()
+        assert app.screen.query_one("#cache-table").row_count == 0
+        assert "unavailable" in str(app.screen.query_one("#cache-detail").render())
+
+    drive(check)
+
+
+def test_home_coach_panel_lists_findings_with_evidence(tmp_path, monkeypatch):
+    from agentlens import coach
+
+    finding = cache.Finding(rule="long_context", severity="warn", ts=T0, title="Long context in session abcd1234",
+                            impact="12 requests above 200k [calc]", impact_tokens=900_000,
+                            evidence=["requests r1…r12, 2026-09-21 10:00–11:00"], fix="compact earlier")
+    real = coach.analyze
+    monkeypatch.setattr(coach, "analyze", lambda *a, **kw: real(*a, **kw).__class__(
+        "last 14 days · all projects", [], 12, [], {}, [finding]))
+    seed(events_for(SEQUENCE))
+
+    async def check(app, pilot):
+        body = str(app.screen.query_one("#coach-body").render())
+        assert "Long context in session abcd1234" in body
+        assert "evidence: requests r1…r12" in body and "fix: compact earlier" in body
+        assert "[calc]" in body  # provenance shown literally, not parsed as markup
+
+    drive(check)
+
+
+def test_home_coach_panel_when_nothing_to_report():
+    seed(events_for(SEQUENCE))
+
+    async def check(app, pilot):
+        assert "No findings" in str(app.screen.query_one("#coach-body").render())
+
+    drive(check)
+
+
+def test_prompts_tab_ranks_prompts_by_tokens(tmp_path):
+    from agentlens.ingest import ingest
+    from transcripts import request_lines, write
+
+    lines = (request_lines("r1", T0 + 11, read=0, write=10_000, session_id=OTHER)
+             + request_lines("r2", T0 + 31, read=10_000, write=90_000, session_id=OTHER))
+    path = write(tmp_path / "t.jsonl", lines)
+    evs = []
+    for name, ts, extra in (("session_start", T0, {"transcript_path": str(path)}),
+                            ("user_prompt_submit", T0 + 10, {"prompt": "small"}),
+                            ("user_prompt_submit", T0 + 30, {"prompt": "a much bigger ask"})):
+        p = copy.deepcopy(load_fixture(name))
+        p.update(session_id=OTHER, **extra)
+        evs += normalize(p, ts)
+    spool.write_events(evs)
+    ingest()
+
+    async def check(app, pilot):
+        await open_session(app, pilot, OTHER[:8])
+        await pilot.press("u")
+        await pilot.pause()
+        screen = app.screen
+        rows = cell_texts(screen.query_one("#prompts-table"))
+        assert [r[0] for r in rows] == ["2", "1"]  # largest first
+        assert rows[0][2] == "17 chars (text not stored)" and rows[0][4] == "100k" and rows[0][5] == "91%"
+        detail = dict((k, v) for k, v, _ in screen.prompt_detail_rows)
+        assert "r2" in detail["largest request"] and "capture_prompts" in detail["text"]
+        await pilot.press("s")
+        assert [r[0] for r in cell_texts(screen.query_one("#prompts-table"))] == ["1", "2"]
+
+    drive(check, size=(200, 50))

@@ -74,7 +74,7 @@ def test_compaction_is_info_and_attributed(tmp_path):
     assert m.cause == "compaction"
     (f,) = rep.findings
     assert f.rule == "compaction" and f.severity == "info"
-    assert "/clear" in f.fix
+    assert "task boundary" in f.fix and "/clear" not in f.fix and "new session" not in f.fix
 
 
 def test_repeated_compactions_warn(tmp_path):

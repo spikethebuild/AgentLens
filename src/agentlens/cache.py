@@ -46,8 +46,8 @@ USER_SWITCH_SOURCES = {"command", "picker", "sdk"}
 EFFORT_SAFE_PREFIXES = ("claude-fable-5", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5")
 
 FIXES = {
-    "model_switch": "Pick the model before you start, or switch right after /clear; each model has its own cache.",
-    "compaction": "Use /clear between unrelated tasks; every compaction rewrites the cached conversation.",
+    "model_switch": "Pick the model at the start and keep it; each model has its own cache, so a switch re-reads everything.",
+    "compaction": "Compact at a task boundary rather than mid-task, and keep tool output small so the context fills more slowly; every compaction rewrites the cached conversation.",
     "idle": "Resume within the cache TTL; after a long break the whole conversation is re-cached.",
     "effort_change": "Set effort at the start of the session; changing it mid-session re-caches the conversation.",
     "unexplained": "Keep MCP servers and settings stable mid-session; with tool search on, new servers don't break the cache.",

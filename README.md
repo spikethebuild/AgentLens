@@ -102,7 +102,7 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[tui]'   # or -e . for CLI o
 
 | Rule | Fires when | Suggests |
 |---|---|---|
-| Long context | a session ran ≥10 requests above 200k tokens of context and they account for ≥30% of its cache reads | `/compact` at a task boundary, or a new session for an unrelated task |
+| Long context | a session ran ≥10 requests above 200k tokens of context and they account for ≥30% of its cache reads | `/compact` at a task boundary, saying what to keep |
 | Starting context | the median first request across sessions is ≥50k tokens | `/context`, disabling unused plugins, trimming CLAUDE.md |
 | Plugin overhead | an enabled plugin lists ≈2k+ tokens of skills, agents and commands `[est]` and none of its skills, agents or MCP tools were called in ≥3 sessions | disabling it for the project, or installing only the parts you use |
 | Large output | Bash calls returned ≥20k characters | narrower commands (`head`, `grep`, quiet flags) |
@@ -132,7 +132,7 @@ Findings
   ✗ 11-12 14:02:11 [clk]  Model switch claude-sonnet-5 → claude-opus-5
       impact    re-processed 51k tokens [calc] (cache written 52k [obs]) · Claude Code estimate $1.14 [obs]
       evidence  event 9c1f2e…(PostModelSwitch, command); request req_01… → req_01…
-      fix       Pick the model before you start, or switch right after /clear; each model has its own cache.
+      fix       Pick the model at the start and keep it; each model has its own cache, so a switch re-reads everything.
 ```
 
 How it works:
@@ -161,7 +161,7 @@ session 24% · resets 12:23 · week 41%
 Opus · ctx 41% · cache 97% hit, 2 misses (warm, 1h)
 ```
 
-The second row (model, context use, prompt-cache hit ratio and misses) comes straight from Claude Code's status line input and is only displayed, never stored; a value Claude Code has not reported yet is left out. The dashboard's the dashboard's **Plan usage** panel shows the current session (5-hour) and current week `[obs]` (Anthropic calls the 5-hour limit the "session" limit), when they were reported `[clk]`, and the tokens Claude Code on this machine used in the current 5-hour window `[calc]` (window start = reset time − 5 h).
+The second row (model, context use, prompt-cache hit ratio and misses) comes straight from Claude Code's status line input and is only displayed, never stored; a value Claude Code has not reported yet is left out. The dashboard's **Plan usage** panel shows the 5-hour window and the weekly window `[obs]` (Anthropic calls the 5-hour limit the "session" limit), when they were reported `[clk]`, and the tokens Claude Code on this machine used in the current 5-hour window `[calc]` (window start = reset time − 5 h).
 
 - **No plan name, no token limit.** Claude Code does not report which plan you are on, and Anthropic does not publish limits as token counts; they are shared with claude.ai and your other devices. AgentLens shows only the percentages Claude Code reports.
 - **Only the windows are kept.** The status line input also carries paths, model and cost; AgentLens stores only `session_id`, `cwd` and `rate_limits`. The latest snapshot is `~/.agentlens/plan_usage.json`; a history event is recorded only when a percentage changes.
@@ -194,8 +194,8 @@ It refreshes every 3 seconds and after each turn while open; nothing runs while 
 
 Run `agentlens` with no arguments (or `agentlens dashboard`) to open the terminal dashboard.
 
-- **Home:** headline tiles (sessions, active now, tool calls, failed, failure rate, average tool time) for the selected project, then **Active session** (the most recent active session's tokens in/out, cache read/written and hit ratio) and **Plan usage** (see above). Below them are your projects, every recorded session (active, idle or ended, newest first) and a live activity feed across all sessions. `/` opens a filter (ID, project, model or state), `f` shows only sessions with failed tool calls, `Enter` opens a session.
-- **Session:** tiles for duration, tool calls, failures, prompts, total tool time and tokens in. It opens on **Errors** when the session has any. Each failed call shows its full sanitized command, exit code, status, duration and error headline and the size of the full output. The other tabs are **Tool calls** (select a call to see everything recorded about it), **Timeline** and **Overview**.
+- **Home:** headline tiles (sessions, active now, tool calls, failed, failure rate, average tool time) for the selected project, then **Active session** (the most recent active session's tokens in/out, cache read/written and hit ratio) and **Plan usage** (see above). Below them are your projects, every recorded session (active, idle or ended, newest first), a live activity feed across all sessions and the **Coach** panel: the top cost-coach findings for the selected project over the last 14 days, each with its evidence and fix (`agentlens coach` lists them all). Sessions under 30 seconds with no tool calls and no recorded usage (quick `claude -p` runs, for example) are hidden from the list but still counted; `a` shows them. `/` opens a filter (ID, project, model or state), `f` shows only sessions with failed tool calls, `Enter` opens a session.
+- **Session:** tiles for duration, tool calls, failures, prompts, total tool time and tokens in. It opens on **Errors** when the session has any. Each failed call shows its full sanitized command, exit code, status, duration and error headline and the size of the full output. The other tabs are **Tool calls** (select a call to see everything recorded about it), **Tokens & cache** (`c`: one row per main-conversation API request with context size, cache read, cache write, uncached input and output; cache misses are marked with their cause and the tokens re-written; selecting a request shows its details and evidence, followed by this session's cache and coach findings), **Prompts** (`u`: which prompt led to the most tokens. Each API request, subagents included, is attributed to the prompt before it by time `[calc]`; the table shows each prompt's requests, tokens in, share of the session, peak context, output and tool calls, largest first, and `s` switches to time order. Prompt text appears only if you opted in with `capture_prompts`; otherwise the prompt's length is shown), **Timeline** and **Overview**.
 - **Live:** while the dashboard is open it drains the spool every second and appends new events as they happen. `p` pauses, `r` syncs now, `?` shows the provenance legend, `Esc` goes back, `q` quits.
 
 Every value carries the same `[obs]`/`[calc]`/`[est]`/`[clk]` labels as the CLI. The dashboard never edits Claude Code settings and makes no network calls. Sessions stay in the database after Claude Code exits, so you can review them at any time.

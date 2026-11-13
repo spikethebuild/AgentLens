@@ -101,8 +101,8 @@ def long_context(s: sqlite3.Row, reqs: list[sqlite3.Row], plugins) -> Finding | 
         big_read,
         [f"session {s['session_id'][:8]}", f"first above: request {first['request_id'][:14]} "
          f"at {render.fmt_ts(first['ts'], short=True)}", f"peak: request {peak['request_id'][:14]}"],
-        "Every tool call re-reads the whole conversation. /compact at the next task boundary, or start a "
-        "new session for an unrelated task." + _related(plugins, "long_context"),
+        "Every tool call re-reads the whole conversation. /compact at the next task boundary (add "
+        "what to keep, e.g. /compact keep the plan) so later requests re-read less." + _related(plugins, "long_context"),
     )
 
 
