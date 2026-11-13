@@ -4,13 +4,35 @@
 
 AgentLens is a local-first observability tool for AI coding agents. It records what Claude Code does (sessions, prompts, tool calls, failures, approvals, compactions, model switches, instruction files loaded) through Claude Code's official hooks and stores it in a local SQLite database. It makes **zero LLM calls**, never blocks the agent, and never stores file contents, prompt text or secrets.
 
-> Status: **0.1.1, first release (alpha)**. Recording (plugin or settings hooks), per-request token usage, the cache coach, plan usage in the status line, the `/agentlens` pane inside Claude Code, the CLI and a terminal dashboard work. Cost estimates and cross-session analytics are planned for v0.3, Codex support for v0.5.
+> Status: **0.1.1, first release (alpha), not yet published.** Recording (plugin or settings hooks), per-request token usage, the cost coach (`agentlens coach`), the cache report, plan usage in the status line, the `/agentlens` pane inside Claude Code, the CLI and a terminal dashboard work. Until the first release is published, install from a source checkout (see [Install](#install)). Cost in dollars and dismissable suggestions are planned for v0.3, Codex support for v0.5.
+
+## What it gives you
+
+- **Where the tokens went**, per session and per API request: input, cache read, cache written, output, cache-hit ratio, context size. Every number says where it came from: `[obs]` reported by Claude Code, `[calc]` derived by AgentLens, `[est]` estimated.
+- **What to change**, with evidence: `agentlens coach` flags sessions that ran far above 200k tokens of context, large starting context, plugins whose skill lists you pay for but never use, oversized command output, and cache rebuilds (idle gaps, model switches). Each suggestion names the sessions and request IDs it is based on.
+- **A live view inside Claude Code**: a pane that opens beside the conversation, plus plan usage (5-hour and weekly %) in the status line.
+- **No cost of its own**: no model calls, nothing sent over the network, and nothing added to the model's context except the few lines of a skill you type yourself.
+
+## What it improved on a real project
+
+Measured on AgentLens's own development: 7 sessions, 523 API requests, Claude Code 2.1.323, November 2026. "Measured" means the same prompt run with and without the change (`claude -p`, Haiku); "replayed" means recorded requests recomputed under the suggestion.
+
+| | Result | How it was found |
+|---|---|---|
+| AgentLens's own overhead | **0 tokens** per request (43,741 with the plugin and without) | measured |
+| A large plugin's skill list, never used | **12,094 tokens** on every request; disabling it cuts **5.6%** of re-read tokens | measured, then applied to the 523 requests |
+| A 830-line `CLAUDE.md` | **17,068 tokens** on every request; moving 38% of it out cuts **3.0%** | measured |
+| `/compact` once context passes 200k | **36%** fewer re-read tokens (8 compactions; +773k cache writes) | replayed; assumes a 20k-token summary |
+| All three together | **~44%** fewer re-read tokens, **~14%** weighted by API price (reads 0.05×, 1-hour writes 2×) | combined |
+
+These are one project's numbers, not a promise. Savings happen only when you act on a suggestion, and how plan limits weigh cache reads is not published. The coach's own size estimates are rough: in this test it overstated the plugin's cost by 2.8× and understated `CLAUDE.md` by 1.7×, which is why they are labelled `[est]`.
 
 ## Quick start
 
-1. In Claude Code: `/plugin marketplace add SiddharthDevare10/AgentLens`, then `/plugin install agentlens@agentlens`.
-2. In a terminal: `pipx install 'agentlens-local[tui]'`, then `agentlens doctor` (every line should say `ok`).
-3. Work as usual. Type `/agentlens` in Claude Code for the live pane, or run `agentlens` in a terminal for the dashboard. Optional: `agentlens statusline install` for plan usage in your status bar.
+1. In Claude Code: `/plugin marketplace add SiddharthDevare10/AgentLens`, then `/plugin install agentlens@agentlens`. (Before the first release, use a clone: `/plugin marketplace add /path/to/AgentLens`.)
+2. In a terminal: `pipx install 'agentlens-local[tui]'` (before the first release: `pip install -e '.[tui]'` in a clone's virtualenv), then `agentlens doctor` (every line should say `ok`).
+3. Work as usual. The AgentLens pane opens beside the conversation in new sessions (`/agentlens` closes or reopens it); `/agentlens-dashboard` opens the full dashboard in a Terminal window (macOS), or run `agentlens` in any terminal.
+4. After a few sessions, run `/agentlens:coach` (or `agentlens coach`) to see what is costing you tokens. Optional: `agentlens statusline install` for plan usage in your status bar.
 
 ## Install
 
