@@ -40,6 +40,12 @@ First public release, published to PyPI as `agentlens-local`.
 - Per-session token totals (API requests, input with cache read/written/uncached,
   output, cache hit ratio) in `inspect`, a TOKENS IN/OUT column in `sessions`, and
   the dashboard (session list column, "Tokens in" tile, overview).
+- Dashboard home: **Active session** panel (tokens in/out, cache read/written,
+  hit ratio of the most recent open session) and **Plan usage** panel.
+- `agentlens statusline` (opt-in, `statusline install|uninstall [--dry-run]`):
+  records Claude Code's documented `rate_limits` (5-hour and weekly used %, reset
+  times) for Pro/Max/Ultra plans, prints a compact status line, keeps and restores
+  an existing status line, never exits non-zero. `status` and `doctor` report it.
 
 ### Changed
 - Version reset from the unpublished 0.3.0 to 0.1.1 to follow the milestone labels.

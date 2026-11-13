@@ -172,6 +172,31 @@ def smoke_test(command: str) -> Check:
                      f"check that `{py} -m agentlens --version` works; reinstall with `agentlens install --repair`")
 
 
+def check_statusline() -> list[Check]:
+    """Only when the AgentLens status line is installed (it is opt-in)."""
+    command = installer.statusline_state()
+    if command is None:
+        return []
+    py = interpreter_of(command)
+    if not py or not (os.path.isfile(py) and os.access(py, os.X_OK)):
+        return [Check(FAIL, "status line", f"interpreter {py} does not exist; your status bar shows nothing",
+                      "agentlens statusline install (from the environment AgentLens is installed in)")]
+    sample = {"session_id": "agentlens-doctor", "rate_limits": {
+        "five_hour": {"used_percentage": 12.5, "resets_at": time.time() + 3600}}}
+    with tempfile.TemporaryDirectory(prefix="agentlens-doctor-") as tmp:
+        env = dict(os.environ, AGENTLENS_HOME=os.path.join(tmp, "home"))
+        try:
+            r = subprocess.run(["sh", "-c", command], input=json.dumps(sample), env=env, capture_output=True,
+                               text=True, timeout=SMOKE_TIMEOUT_S, cwd=tmp)
+        except subprocess.TimeoutExpired:
+            return [Check(FAIL, "status line", f"took longer than {SMOKE_TIMEOUT_S}s")]
+        recorded = Path(env["AGENTLENS_HOME"], "plan_usage.json").exists()
+    if r.returncode == 0 and "5h 12%" in r.stdout and recorded:
+        return [Check(OK, "status line", "agentlens statusline prints plan usage (tested with a sample)")]
+    return [Check(FAIL, "status line", f"test run failed: {(r.stderr.strip() or r.stdout.strip())[:160]}",
+                  "agentlens statusline install")]
+
+
 def check_spool(now: float) -> list[Check]:
     out = []
     failed = spool.failed_count()
@@ -250,6 +275,7 @@ def run(project_dir: Path | None = None, smoke: bool = True) -> list[Check]:
     if smoke:
         for command in sorted({c for st in states for c in st.status.commands}):
             checks.append(smoke_test(command))
+        checks += check_statusline()
     checks += check_spool(now)
     checks += check_database(now, expect_events=plugin_on or any(st.status.events for st in states))
     checks.append(check_log(now))

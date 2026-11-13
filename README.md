@@ -92,11 +92,27 @@ How it works:
 
 `--requests` adds a per-request table. `--brief` prints at most five lines (what the skill shows).
 
+## Plan usage (opt-in status line)
+
+Claude Code tells its **status line** command how much of your plan's 5-hour and weekly limits you have used (Pro, Max and Ultra plans, after the first response). AgentLens can be that command:
+
+```bash
+agentlens statusline install --dry-run   # see the change to ~/.claude/settings.json
+agentlens statusline install
+```
+
+Your status bar then shows `5h 24% · resets 12:23 · wk 41%`, and the dashboard's **Plan usage** panel shows both windows `[obs]`, when they were reported `[clk]`, and the tokens Claude Code on this machine used in the current 5-hour window `[calc]` (window start = reset time − 5 h).
+
+- **No plan name, no token limit.** Claude Code does not report which plan you are on, and Anthropic does not publish limits as token counts; they are shared with claude.ai and your other devices. AgentLens shows only the percentages Claude Code reports.
+- **Only the windows are kept.** The status line input also carries paths, model and cost; AgentLens reads `session_id`, `cwd` and `rate_limits` and drops the rest. The latest snapshot is `~/.agentlens/plan_usage.json`; a history event is recorded only when a percentage changes.
+- **Never blanks your status bar.** It always prints a line and exits 0. If you already had a status line, it is saved, runs with the same input below the AgentLens line, and is restored by `agentlens statusline uninstall`.
+- API-key, Team and Enterprise sessions get no `rate_limits`, so the panel says "not reported".
+
 ## Dashboard
 
 Run `agentlens` with no arguments (or `agentlens dashboard`) to open the terminal dashboard.
 
-- **Home:** headline tiles (sessions, open now, tool calls, failed, failure rate, average tool time) for the selected project. Below them are your projects, every recorded session (open or ended, newest first) and a live activity feed across all sessions. `/` opens a filter (ID, project, model or state), `f` shows only sessions with failed tool calls, `Enter` opens a session.
+- **Home:** headline tiles (sessions, open now, tool calls, failed, failure rate, average tool time) for the selected project, then **Active session** (the most recent open session's tokens in/out, cache read/written and hit ratio) and **Plan usage** (see above). Below them are your projects, every recorded session (open or ended, newest first) and a live activity feed across all sessions. `/` opens a filter (ID, project, model or state), `f` shows only sessions with failed tool calls, `Enter` opens a session.
 - **Session:** tiles for duration, tool calls, failures, prompts, total tool time and tokens in. It opens on **Errors** when the session has any. Each failed call shows its full sanitized command, exit code, status, duration and complete error message. The other tabs are **Tool calls** (select a call to see everything recorded about it), **Timeline** and **Overview**.
 - **Live:** while the dashboard is open it drains the spool every second and appends new events as they happen. `p` pauses, `r` syncs now, `?` shows the provenance legend, `Esc` goes back, `q` quits.
 
@@ -110,6 +126,7 @@ Every value carries the same `[obs]`/`[calc]`/`[est]`/`[clk]` labels as the CLI.
 | `agentlens uninstall [--scope ...] [--dry-run]` | Removes only handlers whose command contains `agentlens hook`. Keeps recorded data. |
 | `agentlens status [--scope ...] [--brief]` | Plugin and settings-hook installation (user, project and local scopes), interpreter health, spool and database state, and warnings (double install, `disableAllHooks`). `--brief` prints at most four lines. |
 | `agentlens doctor [--no-hook-test]` | Read-only health check, one line per check (`ok`/`warn`/`FAIL`) with the fix to run. Runs each configured hook command with a test event against a temporary data directory, so your real data is never touched. Exits 1 if any check fails. |
+| `agentlens statusline install\|uninstall [--dry-run]` | Opt-in: makes AgentLens the Claude Code status line to show and record plan usage (5-hour and weekly %). Keeps and restores any status line you had. |
 | `agentlens sessions [--limit N]` | Recent sessions: start, duration, state, prompts, tool calls, failures, tokens in/out. |
 | `agentlens inspect <id-or-prefix> [--all]` | One session in detail: overview (including API requests, input/output tokens and cache hit ratio), tool calls, errors, timeline. |
 | `agentlens cache [session] [--brief] [--requests]` | Cache coach report: hit ratio, misses, causes with evidence, and fixes. |

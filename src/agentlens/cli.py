@@ -210,6 +210,12 @@ def cmd_status(args) -> int:
     ]
     for line in interp_lines:
         rows.append(("interpreter", line, ""))
+    from agentlens import statusline as _sl
+
+    sl_cmd = installer.statusline_state(st.settings_path if getattr(args, "settings", None) else None)
+    plan = render.plan_usage_rows(_sl.load_snapshot(), sl_cmd is not None, time.time())
+    rows.append(("status line", "agentlens statusline (plan usage)" if sl_cmd else "not installed (optional)", ""))
+    rows += plan[:2]
     rows.append(("spool", f"{len(spool.pending())} pending, {spool.failed_count()} failed", render.CALC))
 
     if db.exists():
@@ -283,6 +289,47 @@ def _status_brief(st, plugin_on: bool, warnings: list[str], others=()) -> int:
         warnings.append(f"last error: {err}")
     for w in warnings[:3]:
         print(f"! {w}")
+    return 0
+
+
+def cmd_statusline(args) -> int:
+    if args.action is None:
+        from agentlens.statusline import run as run_statusline
+
+        return run_statusline()
+    settings = Path(args.settings).expanduser() if args.settings else None
+    try:
+        if args.action == "install":
+            change = installer.install_statusline(settings, python=args.python, dry_run=args.dry_run)
+        else:
+            change = installer.uninstall_statusline(settings, dry_run=args.dry_run)
+    except installer.SettingsError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    path = render.short_path(str(change.settings_path), 80)
+    if not change.changed:
+        print(f"Nothing to change in {path}: the AgentLens status line is "
+              f"{'already installed' if args.action == 'install' else 'not installed'}.")
+        return 0
+    _print_change_header(change, f"statusline {args.action} in")
+    verb = "Would" if change.dry_run else ""
+    if args.action == "install":
+        if change.added:
+            print(f"{verb + ' set' if verb else 'Set'} the Claude Code status line to `agentlens statusline` in {path}.")
+            print("It shows your plan's 5-hour and weekly usage (Pro/Max/Ultra) and records it for the dashboard.")
+            if change.replaced:
+                from agentlens.statusline import previous_path
+
+                print(f"Your previous status line ({change.replaced.get('command')!r}) "
+                      f"{'would be' if verb else 'is'} saved to {render.short_path(str(previous_path()), 80)}, "
+                      "shown below the AgentLens line, and restored by `agentlens statusline uninstall`.")
+        else:
+            print(f"{verb + ' update' if verb else 'Updated'} the status line interpreter path.")
+    else:
+        print(f"{verb + ' restore' if verb else 'Restored'} your previous status line." if change.updated
+              else f"{verb + ' remove' if verb else 'Removed'} the AgentLens status line from {path}.")
+    if change.backup:
+        print(f"Backup of the previous file: {render.short_path(str(change.backup), 100)}")
     return 0
 
 
@@ -445,6 +492,15 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--brief", action="store_true", help="at most four lines (used by the plugin skill)")
     s.set_defaults(func=cmd_status)
 
+    s = sub.add_parser("statusline", help="Claude Code status line showing plan usage (opt-in); "
+                                          "`statusline install` / `statusline uninstall`")
+    s.add_argument("action", nargs="?", choices=["install", "uninstall"],
+                   help="edit ~/.claude/settings.json; without an action, run as the status line command")
+    s.add_argument("--settings", help="settings.json to edit (default: user settings)")
+    s.add_argument("--dry-run", action="store_true", help="show the change as a diff; write nothing")
+    s.add_argument("--python", help="interpreter the status line should use (default: this one)")
+    s.set_defaults(func=cmd_statusline)
+
     s = sub.add_parser("doctor", help="check the installation end to end and print a fix for each problem")
     s.add_argument("--no-hook-test", action="store_true",
                    help="skip running the configured hook command with a test event")
@@ -485,6 +541,10 @@ def main(argv: list[str] | None = None) -> int:
         from agentlens.hook import run
 
         return run(argv[1:])
+    if argv == ["statusline"]:  # status line fast path: stdlib only, always prints, exits 0
+        from agentlens.statusline import run as run_statusline
+
+        return run_statusline()
     parser = build_parser()
     if not argv and sys.stdin.isatty() and sys.stdout.isatty():
         return run_dashboard(parser)

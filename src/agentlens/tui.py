@@ -37,7 +37,7 @@ from textual.widgets import (
     TabPane,
 )
 
-from agentlens import cache, render, store
+from agentlens import cache, installer, render, statusline, store
 from agentlens.ingest import ingest
 
 HISTORY_LIMIT = 1000  # sessions loaded into the explorer
@@ -97,6 +97,9 @@ Screen {{ background: {BG}; color: {TEXT}; }}
 .tile.-bad Digits {{ color: {ROSE}; }}
 .tile.-bad {{ border: round #6b3a4a; }}
 .tile.-muted Digits {{ color: {DIM}; }}
+
+#usage {{ height: 7; }}
+#active-panel, #plan-panel {{ width: 1fr; }}
 
 #body {{ height: 3fr; min-height: 8; }}
 #projects-panel {{ width: 32; }}
@@ -326,6 +329,9 @@ class SessionsScreen(Screen):
         self.query_text = ""
         self._project_keys: list[str | None] = []
         self.feed_rowid = 0
+        # what the usage panels currently show (kv rows)
+        self.active_rows: list[tuple[str, str, str]] = []
+        self.plan_rows: list[tuple[str, str, str]] = []
 
     def compose(self) -> ComposeResult:
         yield TopBar(id="topbar")
@@ -336,6 +342,11 @@ class SessionsScreen(Screen):
             yield Tile("Failed", "[calc]", id="t-failed")
             yield Tile("Failure rate", "[calc]", id="t-rate")
             yield Tile("Avg tool time", "[calc]", id="t-avg")
+        with Horizontal(id="usage"):
+            with VerticalScroll(id="active-panel", classes="panel"):
+                yield Static(id="active-body")
+            with VerticalScroll(id="plan-panel", classes="panel"):
+                yield Static(id="plan-body")
         with Horizontal(id="body"):
             with Vertical(id="projects-panel", classes="panel"):
                 yield ListView(id="projects")
@@ -350,6 +361,9 @@ class SessionsScreen(Screen):
     def on_mount(self) -> None:
         self.query_one("#projects-panel").border_title = "Projects"
         self.query_one("#sessions-panel").border_title = "Sessions"
+        self.query_one("#active-panel").border_title = "Active session"
+        self.query_one("#plan-panel").border_title = "Plan usage"
+        self.query_one("#plan-panel").border_subtitle = escape("from Claude Code's status line")
         feed_panel = self.query_one("#feed-panel")
         feed_panel.border_title = "Live activity"
         feed_panel.border_subtitle = escape("times [clk] · enter opens the session")
@@ -373,7 +387,51 @@ class SessionsScreen(Screen):
     def _refresh_view(self) -> None:
         self._refresh_table()
         self._refresh_tiles()
+        self._refresh_usage()
         self._refresh_title()
+
+    def active_session(self) -> sqlite3.Row | None:
+        """The most recently active open session in the selected project."""
+        open_now = [s for s in self._in_project() if render.session_state(s) == "open"]
+        return max(open_now, key=lambda s: s["last_seen"], default=None)
+
+    def _refresh_usage(self) -> None:
+        now = time.time()
+        conn = self.app.conn
+        s = self.active_session()
+        if s is None:
+            active: list = [("session", f"{render.UNAVAILABLE} (no open session in this project)", "")]
+        else:
+            usage = store.session_usage(conn, s["provider"], s["session_id"])
+            reason = None if usage["requests"] else cache.usage_reason(conn, s["provider"], s["session_id"])
+            active = [
+                ("session", f"{s['session_id'][:8]} · {s['model'] or 'model unavailable'} · "
+                            f"last event {clock(s['last_seen'])}", render.CLK),
+            ]
+            if usage["requests"]:
+                active += [
+                    ("tokens in", f"{render.fmt_tokens(usage['input'])} (cache read "
+                                  f"{render.fmt_tokens(usage['cache_read'])} · written "
+                                  f"{render.fmt_tokens(usage['cache_write'])} · uncached "
+                                  f"{render.fmt_tokens(usage['uncached'])})", render.OBS),
+                    ("tokens out", render.fmt_tokens(usage["output"]), render.OBS),
+                    ("cache hit",
+                     (f"{usage['hit_ratio']:.1%}" if usage["hit_ratio"] is not None else render.UNAVAILABLE)
+                     + f" · {usage['requests']} API requests", render.CALC),
+                ]
+            else:
+                active += render.token_rows(usage, reason)
+        self.active_rows = active
+        self.query_one("#active-body", Static).update(kv_table(active))
+
+        snap = statusline.load_snapshot()
+        five = statusline.current_windows(snap, now).get("five_hour")
+        window_tokens = None
+        if five and five.get("resets_at"):
+            window_tokens = store.tokens_since(conn, five["resets_at"] - statusline.WINDOW_SECONDS["five_hour"])
+        installed = installer.statusline_state() is not None
+        self.plan_rows = render.plan_usage_rows(snap, installed, now, window_tokens)
+        self.query_one("#plan-body", Static).update(kv_table(self.plan_rows))
 
     def _in_project(self) -> list[sqlite3.Row]:
         if self.project is None:

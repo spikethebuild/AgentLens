@@ -563,3 +563,16 @@ def session_usage(conn: sqlite3.Connection, provider: str, session_id: str) -> d
     # Same definition as the cache report: main conversation, complete requests only.
     usage["hit_ratio"] = usage["main_read"] / usage["main_in"] if usage["main_in"] else None
     return usage
+
+
+def tokens_since(conn: sqlite3.Connection, since_ts: float) -> dict:
+    """Token totals of every recorded API request at or after ``since_ts`` (all sessions)."""
+    row = conn.execute(
+        """SELECT COUNT(*) AS requests,
+                  SUM(COALESCE(input_tokens, 0) + COALESCE(cache_read_tokens, 0)
+                      + COALESCE(cache_write_tokens, 0)) AS input,
+                  SUM(COALESCE(output_tokens, 0)) AS output
+           FROM api_requests WHERE ts >= ?""",
+        (since_ts,),
+    ).fetchone()
+    return {"requests": row["requests"] or 0, "input": row["input"] or 0, "output": row["output"] or 0}

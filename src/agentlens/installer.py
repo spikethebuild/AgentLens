@@ -48,6 +48,7 @@ class Change:
     backup: Path | None = None
     dry_run: bool = False
     diff: str = ""
+    replaced: Any = None  # the user's status line that `install_statusline` replaced
 
     @property
     def changed(self) -> bool:
@@ -310,3 +311,94 @@ def status(settings_path: Path | None = None) -> InstallStatus:
         commands=commands,
         disable_all_hooks=bool(doc.get("disableAllHooks")),
     )
+
+
+# ------------------------------------------------------------- status line
+
+STATUSLINE_MARKER = "agentlens statusline"
+
+
+def statusline_command(python: str | None = None) -> str:
+    return hook_command(python).replace("hook claude-code", "statusline")
+
+
+def _is_our_statusline(value: Any) -> bool:
+    return isinstance(value, dict) and STATUSLINE_MARKER in str(value.get("command", ""))
+
+
+def _previous_path() -> Path:
+    from agentlens.statusline import previous_path
+
+    return previous_path()
+
+
+def install_statusline(settings_path: Path | None = None, python: str | None = None, *,
+                       dry_run: bool = False) -> Change:
+    """Make ``agentlens statusline`` the status line; keep the user's old one to run below it."""
+    path = settings_path or paths.claude_settings_path()
+    target = _target(path)
+    doc, original = _load(target)
+    change = Change(settings_path=path)
+    current = doc.get("statusLine")
+    wanted = statusline_command(python)
+    if current is not None and not isinstance(current, dict):
+        raise SettingsError(f'"statusLine" in {path} is not an object; not modifying it')
+    if _is_our_statusline(current):
+        if current.get("command") == wanted:
+            change.unchanged.append("statusLine")
+            return change
+        doc["statusLine"] = dict(current, command=wanted)
+        change.updated.append("statusLine")
+        return _commit(path, target, doc, original, change, dry_run)
+    new = {"type": "command", "command": wanted}
+    if current and "padding" in current:
+        new["padding"] = current["padding"]
+    doc["statusLine"] = new
+    change.added.append("statusLine")
+    change.replaced = current
+    _commit(path, target, doc, original, change, dry_run)
+    if current and not dry_run:
+        prev = _previous_path()
+        paths.ensure_dir(prev.parent)
+        fd = os.open(prev, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, (json.dumps({"statusLine": current}, indent=2) + "\n").encode("utf-8"))
+        finally:
+            os.close(fd)
+    return change
+
+
+def uninstall_statusline(settings_path: Path | None = None, *, dry_run: bool = False) -> Change:
+    """Remove the AgentLens status line and restore the one it replaced, if any."""
+    path = settings_path or paths.claude_settings_path()
+    target = _target(path)
+    doc, original = _load(target)
+    change = Change(settings_path=path)
+    if original is None or not _is_our_statusline(doc.get("statusLine")):
+        return change
+    prev_file = _previous_path()
+    previous = None
+    try:
+        previous = json.loads(prev_file.read_text()).get("statusLine")
+    except (OSError, ValueError, AttributeError):
+        previous = None
+    if isinstance(previous, dict) and previous.get("command"):
+        doc["statusLine"] = previous
+        change.updated.append("statusLine")  # restored
+    else:
+        del doc["statusLine"]
+        change.removed.append("statusLine")
+    _commit(path, target, doc, original, change, dry_run)
+    if not dry_run and change.updated:
+        prev_file.unlink(missing_ok=True)
+    return change
+
+
+def statusline_state(settings_path: Path | None = None) -> str | None:
+    """The AgentLens status line command if installed, else None (invalid JSON -> None)."""
+    try:
+        doc, _ = _load(_target(settings_path or paths.claude_settings_path()))
+    except SettingsError:
+        return None
+    value = doc.get("statusLine")
+    return str(value.get("command")) if _is_our_statusline(value) else None

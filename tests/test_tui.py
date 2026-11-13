@@ -287,3 +287,41 @@ def test_dashboard_without_textual_explains_extra(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert "agentlens[tui]" in captured.err
     assert "usage: agentlens" in captured.out
+
+
+# --------------------------------------------------------- usage panels
+
+
+def test_home_shows_active_session_and_plan_usage(tmp_path):
+    import json
+    import time
+
+    from agentlens import statusline
+    from agentlens.ingest import ingest
+    from transcripts import request_lines, write
+
+    now = time.time()
+    path = write(tmp_path / "t.jsonl", request_lines("r1", now - 60, read=0, write=40_000, out=900)
+                 + request_lines("r2", now - 30, read=40_000, write=500, out=400))
+    start = copy.deepcopy(load_fixture("session_start"))
+    start.update(session_id=OTHER, transcript_path=str(path))
+    spool.write_events(normalize(start, now - 90))
+    ingest()
+    paths.ensure_dir(paths.home())
+    statusline.snapshot_path().write_text(json.dumps(statusline.parse(
+        {"session_id": OTHER, "rate_limits": {"five_hour": {"used_percentage": 23.5, "resets_at": now + 3600}}},
+        now)))
+
+    async def check(app, pilot):
+        active = " ".join(f"{k} {v}" for k, v, _ in app.screen.active_rows)
+        plan = " ".join(f"{k} {v}" for k, v, _ in app.screen.plan_rows)
+        assert OTHER[:8] in active and "tokens in 81k" in active and "cache hit" in active
+        assert "24% used" in plan and "tokens this 5h window" in plan
+    drive(check, size=(200, 50))
+
+
+def test_home_usage_panels_when_nothing_is_available():
+    async def check(app, pilot):
+        assert "no open session" in app.screen.active_rows[0][1]
+        assert "agentlens statusline install" in app.screen.plan_rows[0][1]
+    drive(check)

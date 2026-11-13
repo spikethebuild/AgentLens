@@ -394,3 +394,46 @@ def render_inspect(
     out.append(table(["TIME [clk]", "EVENT", "DETAIL"], erows))
     out.append("\n" + LEGEND)
     return "\n".join(out)
+
+
+def plan_usage_rows(snap: dict | None, installed: bool, now: float,
+                    window_tokens: dict | None = None) -> list[tuple[str, str, str]]:
+    """Claude plan-usage windows from the status line snapshot. Never a plan name or token limit."""
+    from agentlens import statusline
+
+    windows = statusline.current_windows(snap, now)
+    if not windows:
+        if not installed and not snap:
+            why = "enable with `agentlens statusline install`"
+        elif not snap:
+            why = "not reported yet: Claude Code sends it to Pro/Max/Ultra plans after the first response"
+        else:
+            why = "the last reported windows have reset; waiting for Claude Code to report again"
+        return [("plan usage", f"{UNAVAILABLE} ({why})", "")]
+    rows = []
+    labels = {"five_hour": "5-hour window", "seven_day": "weekly window"}
+    for name in statusline.WINDOWS:
+        w = windows.get(name)
+        if w is None:
+            continue
+        resets = w.get("resets_at")
+        when = fmt_ts(resets, short=True) if resets else "reset time not reported"
+        rows.append((labels[name], f"{w['used_percentage']:.0f}% used · resets {when}", OBS))
+    age = max(0, now - snap["captured_at"])
+    rows.append(("as of", f"{fmt_ts(snap['captured_at'], short=True)} ({_ago(age)})", CLK))
+    if window_tokens is not None and "five_hour" in windows:
+        if window_tokens["requests"]:
+            rows.append(("tokens this 5h window",
+                         f"{fmt_tokens(window_tokens['input'])} in / {fmt_tokens(window_tokens['output'])} out "
+                         f"(this machine)", CALC))
+        else:
+            rows.append(("tokens this 5h window", f"{UNAVAILABLE} (no requests recorded in this window)", ""))
+    return rows
+
+
+def _ago(seconds: float) -> str:
+    if seconds < 90:
+        return f"{seconds:.0f}s ago"
+    if seconds < 5400:
+        return f"{seconds / 60:.0f} min ago"
+    return f"{seconds / 3600:.1f} h ago"
