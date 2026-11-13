@@ -1,0 +1,22 @@
+name: Feature request
+description: Suggest something AgentLens should show or do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: For example, a token or cache question you could not answer with AgentLens today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like AgentLens to do?
+    validations:
+      required: true
+  - type: textarea
+    id: data
+    attributes:
+      label: Where would the data come from?
+      description: AgentLens only uses data Claude Code documents (hooks, status line, transcripts) and never calls a model. A link to the docs helps.

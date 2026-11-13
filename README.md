@@ -4,7 +4,13 @@
 
 AgentLens is a local-first observability tool for AI coding agents. It records what Claude Code does (sessions, prompts, tool calls, failures, approvals, compactions, model switches, instruction files loaded) through Claude Code's official hooks and stores it in a local SQLite database. It makes **zero LLM calls**, never blocks the agent, and never stores file contents, prompt text or secrets.
 
-> Status: **v0.3 cache coach**. Recording (plugin or settings hooks), per-request token usage, the cache coach, the CLI and a terminal dashboard work. Codex support is planned for v0.5.
+> Status: **0.1.1, first release (alpha)**. Recording (plugin or settings hooks), per-request token usage, the cache coach, plan usage in the status line, the `/agentlens` pane inside Claude Code, the CLI and a terminal dashboard work. Cost estimates and cross-session analytics are planned for v0.3, Codex support for v0.5.
+
+## Quick start
+
+1. In Claude Code: `/plugin marketplace add SiddharthDevare10/AgentLens`, then `/plugin install agentlens@agentlens`.
+2. In a terminal: `pipx install 'agentlens-local[tui]'`, then `agentlens doctor` (every line should say `ok`).
+3. Work as usual. Type `/agentlens` in Claude Code for the live pane, or run `agentlens` in a terminal for the dashboard. Optional: `agentlens statusline install` for plan usage in your status bar.
 
 ## Install
 
@@ -21,6 +27,7 @@ In Claude Code:
 
 Then run `/reload-plugins` or start a new session. Every session is recorded from then on.
 
+- `/agentlens` opens a live pane beside the conversation (see "Inside Claude Code" below).
 - `/agentlens:cache` prints a five-line cache summary for the current session (it runs locally; its few lines are the only tokens it adds).
 - `/agentlens:status` prints a short health check.
 
@@ -213,7 +220,45 @@ Redaction runs before anything is written to disk, including the spool. It cover
 - Secret-named `KEY=value` / `"key": "value"` pairs, and `--password`/`--token`/`--api-key` flags.
 - Private key blocks.
 
-Set `AGENTLENS_HOME` to keep all data somewhere other than `~/.agentlens`.
+Files AgentLens keeps, all under `~/.agentlens` (directory mode 0700, files 0600):
+
+| Path | What |
+|---|---|
+| `agentlens.db` | The SQLite database: normalized, redacted events and per-request token counts. |
+| `spool/` | Events waiting to be ingested (normally empty); `spool/failed/` holds any that could not be read. |
+| `plan_usage.json` | The latest plan-usage windows (only with the status line installed). |
+| `statusline-previous.json` | Your previous status line, kept so `statusline uninstall` can restore it. |
+| `salt` | The key for prompt hashes. |
+| `config.json` | Optional settings (e.g. `capture_prompts`). |
+| `logs/agentlens.log` | Errors from hooks and ingest (redacted). |
+
+AgentLens makes no network calls and sends nothing anywhere. Set `AGENTLENS_HOME` to keep all data somewhere other than `~/.agentlens`.
+
+## Troubleshooting
+
+Start with `agentlens doctor`: it checks everything below and prints the command that fixes each problem. It changes nothing itself.
+
+| Symptom | Cause and fix |
+|---|---|
+| No sessions appear | Neither the plugin nor settings hooks are installed, or `disableAllHooks` is set. `doctor` says which. Install the plugin, or run `agentlens install`. |
+| Every event shows up twice in `status` | The plugin and settings hooks are both installed. Keep one: `agentlens uninstall`. |
+| `interpreter … MISSING` | The virtualenv AgentLens was installed from moved or was deleted. Run `agentlens install --repair` from the current environment. |
+| Some events never appear (e.g. compactions) | Hooks from an older AgentLens lack newer events. `agentlens install --dry-run`, then `agentlens install`. |
+| Tokens show `unavailable (…)` | The reason is shown: usually the session's transcript was not found or has no usage entries. The transcript format is undocumented, so a Claude Code update can change it. |
+| Plan usage shows `unavailable` | Install the status line (`agentlens statusline install`), or you are on an API key, Team or Enterprise plan, which get no plan windows. |
+| `/agentlens` does nothing | It needs the plugin and Claude Code v2.1.287+. A pane opened by a mod on its own waits for a wide terminal; one you open yourself shows at any width. |
+| Status bar went blank | AgentLens never exits non-zero, so check `~/.agentlens/logs/agentlens.log` and that the workspace trust dialog was accepted. `agentlens statusline uninstall` restores your previous status line. |
+
+## Uninstall
+
+```bash
+agentlens statusline uninstall     # if you installed it; restores your previous status line
+agentlens uninstall                # settings hooks (add --scope project|local if you used them)
+pipx uninstall agentlens-local     # or: uv tool uninstall agentlens-local
+rm -rf ~/.agentlens                # recorded data (optional; nothing else is stored)
+```
+
+In Claude Code, remove the plugin with `/plugin` (Installed tab) or `claude plugin uninstall agentlens@agentlens`. Uninstalling never deletes `~/.agentlens`; that is the last step above.
 
 ## Try it without installing hooks
 

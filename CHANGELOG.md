@@ -53,6 +53,10 @@ First public release, published to PyPI as `agentlens-local`.
   events; read-only, refreshes only while open. `agentlens pane-data` prints the
   same snapshot as JSON.
 
+- Release docs: README quick start, troubleshooting, uninstall and a list of
+  the files AgentLens keeps; `SECURITY.md` (private reporting), `CONTRIBUTING.md`,
+  issue templates, and a test that every CLI command is in the README table.
+
 ### Changed
 - Version reset from the unpublished 0.3.0 to 0.1.1 to follow the milestone labels.
 - Roadmap revised (second revision): v0.1.x Release → v0.2 TUI, then Agent
