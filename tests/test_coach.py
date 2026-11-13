@@ -248,3 +248,14 @@ def test_coach_skill_is_user_invoked_and_short():
     assert "name: coach" in front and "disable-model-invocation: true" in front
     assert '!`sh "${CLAUDE_PLUGIN_ROOT}/hooks/run.sh" coach --brief`' in text
     assert len(text) < 600
+
+
+def test_many_long_sessions_are_folded(tmp_path):
+    for i in range(6):
+        sid = f"{i:08d}" + SID[8:]
+        seed(tmp_path, [250_000 + i * 1000] * 12, sid=sid, start=T0 + i * 200)
+    longs = [f for f in analyze().findings if f.rule == "long_context"]
+    assert len(longs) == coach.LONG_CONTEXT_SHOWN + 1
+    assert longs[-1].title.startswith("3 more sessions") or any(f.title.startswith("3 more sessions") for f in longs)
+    shown = [f for f in longs if f.title.startswith("Session ")]
+    assert [f.evidence[0] for f in shown] == ["session 00000005", "session 00000004", "session 00000003"]

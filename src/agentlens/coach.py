@@ -31,6 +31,7 @@ DEFAULT_DAYS = 14
 LONG_CONTEXT_TOKENS = 200_000
 LONG_CONTEXT_MIN_REQUESTS = 10
 LONG_CONTEXT_MIN_SHARE = 0.30
+LONG_CONTEXT_SHOWN = 3          # sessions listed one by one; the rest are summed in one finding
 START_CONTEXT_WARN = 50_000
 PLUGIN_LISTING_WARN = 2_000      # estimated tokens
 PLUGIN_UNUSED_MIN_SESSIONS = 3
@@ -174,6 +175,32 @@ def large_output(rows: list[tuple[int, str]], first_ts: float) -> Finding | None
     )
 
 
+def _fold(findings: list[Finding]) -> list[Finding]:
+    """Per rule, list the LONG_CONTEXT_SHOWN biggest findings and sum the rest into one."""
+    by_rule: dict[str, list[Finding]] = {}
+    for f in findings:
+        by_rule.setdefault(f.rule, []).append(f)
+    out: list[Finding] = []
+    for rule, group in by_rule.items():
+        group.sort(key=lambda f: -(f.impact_tokens or 0))
+        out += group[:LONG_CONTEXT_SHOWN]
+        rest = group[LONG_CONTEXT_SHOWN:]
+        if not rest:
+            continue
+        total = sum(f.impact_tokens or 0 for f in rest)
+        label = "ran long above " + fmt_tokens(LONG_CONTEXT_TOKENS) + " context" if rule == "long_context" \
+            else f"had the same finding ({rule})"
+        out.append(Finding(
+            rule, "warn" if any(f.severity == "warn" for f in rest) else "info", rest[0].ts,
+            f"{len(rest)} more sessions {label} {render.CALC}",
+            (f"{fmt_tokens(total)} tokens in total {render.CALC}" if total else "see each session's report"),
+            None,  # ranked after the sessions it summarises; the total is in the text
+            [f.evidence[0] for f in rest[:8]] + ([f"… {len(rest) - 8} more"] if len(rest) > 8 else []),
+            rest[0].fix,
+        ))
+    return out
+
+
 # ------------------------------------------------------------------ analysis
 
 
@@ -255,6 +282,7 @@ def analyze(conn: sqlite3.Connection, project: str | None, days: int = DEFAULT_D
     f = large_output(outputs, first_ts)
     if f:
         findings.append(f)
+    findings = _fold(findings)
     findings.sort(key=lambda f: (f.severity != "warn", -(f.impact_tokens or 0), f.ts))
     return CoachReport(scope, sessions, n_requests, plugins, uses, findings)
 
