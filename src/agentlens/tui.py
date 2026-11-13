@@ -961,5 +961,11 @@ class AgentLensApp(App):
 
 
 def run() -> int:
-    AgentLensApp().run()
+    from agentlens import autoopen
+
+    autoopen.mark_running()  # so a session start does not open a second dashboard
+    try:
+        AgentLensApp().run()
+    finally:
+        autoopen.clear_running()
     return 0

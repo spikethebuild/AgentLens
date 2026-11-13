@@ -467,7 +467,29 @@ def run_dashboard(parser: argparse.ArgumentParser | None = None) -> int:
 
 
 def cmd_dashboard(args) -> int:
-    return run_dashboard()
+    if args.auto_open is None:
+        return run_dashboard()
+    from agentlens import autoopen
+
+    if args.auto_open == "off":
+        autoopen.disable()
+        print("The dashboard will no longer open by itself.")
+        return 0
+    if sys.platform != "darwin":
+        print("Opening the dashboard automatically is supported on macOS only.", file=sys.stderr)
+        return 1
+    try:
+        import textual  # noqa: F401
+    except ImportError:
+        print("This Python cannot run the dashboard (the `tui` extra is missing):\n"
+              f"  {sys.executable}\n"
+              "Run this command with an AgentLens installed with `agentlens-local[tui]`.", file=sys.stderr)
+        return 1
+    autoopen.enable(sys.executable)
+    print("The dashboard will open in a new Terminal window when a Claude Code session starts\n"
+          "(new sessions only; not on resume, /clear or compaction; never twice).\n"
+          f"It runs with {sys.executable}. Turn off: agentlens dashboard --auto-open off")
+    return 0
 
 
 def cmd_hook(args) -> int:
@@ -543,6 +565,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_inspect)
 
     s = sub.add_parser("dashboard", help="open the terminal dashboard (same as running `agentlens` alone)")
+    s.add_argument("--auto-open", choices=("on", "off"), default=None,
+                   help="macOS: open the dashboard in a new Terminal window when a Claude Code session starts")
     s.set_defaults(func=cmd_dashboard)
 
     s = sub.add_parser("cache", help="where prompt cache was rebuilt in a session, why, and the fix")

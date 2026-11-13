@@ -55,6 +55,25 @@ def handle(provider: str, raw: bytes, received_at: float) -> None:
     spool.write_events(events)
     if any(e.type == "session.end" for e in events):
         _spawn_ingest()
+    for ev in events:
+        if ev.type == "session.start":
+            _maybe_open_dashboard(ev.data.get("start_source"))
+
+
+def _maybe_open_dashboard(start_source) -> None:
+    """Opt-in: open the dashboard in a new Terminal window (never raises)."""
+    try:
+        from agentlens import autoopen
+
+        result = autoopen.maybe_open(start_source)
+        if result != "opened" and not result.startswith(("skip: off", "skip: not a new")):
+            from agentlens.errlog import log_error
+
+            log_error(f"dashboard auto-open: {result}")
+    except Exception as exc:  # noqa: BLE001 - must never fail the agent
+        from agentlens.errlog import log_error
+
+        log_error("dashboard auto-open failed", exc)
 
 
 def run(argv: list[str]) -> int:
