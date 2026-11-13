@@ -35,8 +35,8 @@ test whose paths escape it. Keep it that way for new tests.
 8. **Suggestions cite evidence**: sessions, event or request IDs, times, counts.
 
 Provider facts (hook fields, status line fields, cache behaviour) must come
-from the official docs. `CLAUDE.md` lists what has been verified and when; check
-the docs again before relying on anything not listed there.
+from the official docs. Check them, and note the date you checked, before
+relying on a field or behaviour.
 
 ## Pull requests
 
@@ -46,4 +46,4 @@ the docs again before relying on anything not listed there.
 - Never commit real transcripts, settings files or secrets. Test fixtures use
   made-up values.
 
-AI coding agents working on this repo should read `CLAUDE.md` first.
+AI coding agents working on this repo should follow the rules above.

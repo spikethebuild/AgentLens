@@ -6,3 +6,8 @@ build/
 dist/
 .pytest_cache/
 .DS_Store
+
+# local-only: agent instructions and test leftovers
+CLAUDE.md
+.coverage
+test-results/

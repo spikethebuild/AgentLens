@@ -310,7 +310,7 @@ uv venv --python 3.13 .venv && uv pip install --python .venv/bin/python -e '.[de
 .venv/bin/pytest -q
 ```
 
-Tests run with temporary `HOME`, `AGENTLENS_HOME` and `AGENTLENS_CLAUDE_SETTINGS`. A fixture fails any test whose paths resolve outside the sandbox. See `CLAUDE.md` for the full spec and the working rules, and `RELEASING.md` for how releases are cut.
+Tests run with temporary `HOME`, `AGENTLENS_HOME` and `AGENTLENS_CLAUDE_SETTINGS`. A fixture fails any test whose paths resolve outside the sandbox. See `CONTRIBUTING.md` for the working rules and `RELEASING.md` for how releases are cut.
 
 CI (`.github/workflows/ci.yml`) runs the suite on Ubuntu and macOS for Python 3.10–3.14, plus a job without the `tui` extra to keep the core standard-library only.
 
