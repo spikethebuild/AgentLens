@@ -106,6 +106,7 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[tui]'   # or -e . for CLI o
 | Starting context | the median first request across sessions is ≥50k tokens | `/context`, disabling unused plugins, trimming CLAUDE.md |
 | Plugin overhead | an enabled plugin lists ≈2k+ tokens of skills, agents and commands `[est]` and none of its skills, agents or MCP tools were called in ≥3 sessions | disabling it for the project, or installing only the parts you use |
 | Large output | Bash calls returned ≥20k characters | narrower commands (`head`, `grep`, quiet flags) |
+| Expensive prompt | one prompt's turn used ≥2M tokens and ≥20% of its session (requests attributed to the prompt before them by time `[calc]`) | names the prompt (its text if you opted in with `capture_prompts`, else its length) and gives tips from what the turn did: a short prompt that led to many requests, many file reads/searches, large tool output, failed tool calls, or a large starting context |
 | Cache | the cache report below found a rebuild (idle gap, model switch, effort change, large instruction files) | that rule's fix |
 
 **Plugins that help.** When an enabled plugin ships a skill aimed at the same problem, the suggestion names it. For example, with [ECC](https://github.com/affaan-m/ECC) installed, long-context findings point to `/ecc:strategic-compact`. No plugin is required, and AgentLens never runs one. The report also lists the plugin skills you did use, with how much each call grew the context `[calc]`.

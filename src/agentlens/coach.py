@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from agentlens import cache, inventory, render, store
+from agentlens import cache, inventory, render, store, turns
 from agentlens.cache import Finding
 
 fmt_tokens = render.fmt_tokens
@@ -36,6 +36,13 @@ START_CONTEXT_WARN = 50_000
 PLUGIN_LISTING_WARN = 2_000      # estimated tokens
 PLUGIN_UNUSED_MIN_SESSIONS = 3
 LARGE_OUTPUT_CHARS = 20_000
+HEAVY_PROMPT_TOKENS = 2_000_000  # tokens in (uncached + cache read + cache write) for one prompt's turn
+HEAVY_PROMPT_SHARE = 0.20        # ... and at least this share of its session
+PROMPT_SEARCHES = 8              # file reads/searches in one turn worth a "name the files" tip
+PROMPT_FAILURES = 2
+PROMPT_SHORT_CHARS = 80          # a prompt this short that led to many requests
+PROMPT_SHORT_REQUESTS = 20
+PROMPT_START_CONTEXT = 150_000
 CHARS_PER_TOKEN_EST = 4
 
 # A rule's problem -> plugin skills that address it, if such a plugin is enabled.
@@ -175,6 +182,59 @@ def large_output(rows: list[tuple[int, str]], first_ts: float) -> Finding | None
     )
 
 
+def prompt_tips(t: turns.Turn) -> list[str]:
+    """Deterministic advice for one expensive prompt, each tip citing the count it is based on."""
+    tips = []
+    if t.prompt_chars is not None and t.prompt_chars < PROMPT_SHORT_CHARS and len(t.requests) >= PROMPT_SHORT_REQUESTS:
+        tips.append(f"A {t.prompt_chars}-character prompt led to {len(t.requests)} requests: state the scope, "
+                    "the files and what done looks like.")
+    if t.searches >= PROMPT_SEARCHES:
+        tips.append(f"{t.searches} file reads/searches: name the files, functions or error message to start from.")
+    if t.output_chars >= LARGE_OUTPUT_CHARS:
+        tips.append(f"Tool output was {fmt_tokens(t.output_chars)} characters: ask for filtered output "
+                    "(tail, grep, quiet flags, a single test).")
+    if t.failures >= PROMPT_FAILURES:
+        tips.append(f"{t.failures} tool calls failed: give the exact command, path or environment up front.")
+    if t.start_context is not None and t.start_context >= PROMPT_START_CONTEXT:
+        tips.append(f"The turn started at {fmt_tokens(t.start_context)} context, which every request re-read: "
+                    "/compact before a big new task.")
+    if not tips:
+        tips.append(f"{len(t.all_requests)} requests in one turn: split the task into smaller prompts, "
+                    "each with its files and a done condition.")
+    return tips
+
+
+def heavy_prompts(s: sqlite3.Row, session_turns: list[turns.Turn]) -> list[Finding]:
+    """Prompts whose turn used at least HEAVY_PROMPT_TOKENS and HEAVY_PROMPT_SHARE of the session."""
+    total = sum(t.tokens_in for t in session_turns)
+    out = []
+    for t in session_turns:
+        if not t.index or not total:
+            continue
+        share = t.tokens_in / total
+        if t.tokens_in < HEAVY_PROMPT_TOKENS or share < HEAVY_PROMPT_SHARE:
+            continue
+        sid = s["session_id"][:8]
+        quote = (f"prompt: \"{render.clip(' '.join(t.prompt_text.split()), 120)}\"" if t.prompt_text
+                 else f"prompt text not stored ({t.prompt_chars if t.prompt_chars is not None else '?'} chars; "
+                 "opt in with capture_prompts)")
+        evidence = [quote, f"session {sid} · event {t.prompt_event[:12] if t.prompt_event else '?'} (prompt.submit)"]
+        biggest = max(t.requests, key=lambda r: turns._ctx(r) or 0, default=None)
+        if biggest is not None:
+            evidence.append(f"largest request {biggest['request_id'][:14]} at {render.fmt_ts(biggest['ts'], short=True)}")
+        peak = t.peak_context
+        out.append(Finding(
+            "heavy_prompt", "warn", t.start,
+            f"Prompt at {render.fmt_ts(t.start, short=True)} in session {sid} used {fmt_tokens(t.tokens_in)} "
+            f"tokens ({share:.0%} of the session) {render.CALC}",
+            f"{len(t.requests)} requests + {len(t.sub_requests)} subagent, peak context "
+            f"{fmt_tokens(peak) if peak is not None else render.UNAVAILABLE}, {sum(t.tools.values())} tool calls "
+            f"{render.CALC}",
+            t.tokens_in, evidence, " ".join(prompt_tips(t)),
+        ))
+    return out
+
+
 def _fold(findings: list[Finding]) -> list[Finding]:
     """Per rule, list the LONG_CONTEXT_SHOWN biggest findings and sum the rest into one."""
     by_rule: dict[str, list[Finding]] = {}
@@ -190,9 +250,12 @@ def _fold(findings: list[Finding]) -> list[Finding]:
         total = sum(f.impact_tokens or 0 for f in rest)
         label = "ran long above " + fmt_tokens(LONG_CONTEXT_TOKENS) + " context" if rule == "long_context" \
             else f"had the same finding ({rule})"
+        what = ("expensive prompt" + ("s" if len(rest) > 1 else "")) if rule == "heavy_prompt" else "sessions"
+        if rule == "heavy_prompt":
+            label = f"above {fmt_tokens(HEAVY_PROMPT_TOKENS)} tokens"
         out.append(Finding(
             rule, "warn" if any(f.severity == "warn" for f in rest) else "info", rest[0].ts,
-            f"{len(rest)} more sessions {label} {render.CALC}",
+            f"{len(rest)} more {what} {label} {render.CALC}",
             (f"{fmt_tokens(total)} tokens in total {render.CALC}" if total else "see each session's report"),
             None,  # ranked after the sessions it summarises; the total is in the text
             [f.evidence[0] for f in rest[:8]] + ([f"… {len(rest) - 8} more"] if len(rest) > 8 else []),
@@ -260,6 +323,7 @@ def analyze(conn: sqlite3.Connection, project: str | None, days: int = DEFAULT_D
             if f:
                 findings.append(f)
         _skill_uses(events, reqs, uses, agent_uses)
+        findings += heavy_prompts(s, turns.session_turns(conn, provider, sid, events))
         commands = {e["tool_use_id"]: (render.parse_data(e["data"]).get("input") or {}).get("command", "")
                     for e in events if e["type"] == "tool.pre" and e["tool_name"] == "Bash"}
         for e in events:
@@ -317,7 +381,8 @@ def render_report(rep: CoachReport) -> str:
                       if u.growth else "")
             out.append(f"  {u.name} ×{u.count}{growth}")
     out.append("\nThresholds: long context ≥" + fmt_tokens(LONG_CONTEXT_TOKENS)
-               + f", start ≥{fmt_tokens(START_CONTEXT_WARN)}, plugin listing ≥{fmt_tokens(PLUGIN_LISTING_WARN)} "
+               + f", prompt ≥{fmt_tokens(HEAVY_PROMPT_TOKENS)} and ≥{HEAVY_PROMPT_SHARE:.0%} of its session"
+               f", start ≥{fmt_tokens(START_CONTEXT_WARN)}, plugin listing ≥{fmt_tokens(PLUGIN_LISTING_WARN)} "
                f"{render.EST}, Bash output ≥{LARGE_OUTPUT_CHARS // 1000}k chars.")
     out.append("Token counts come from transcript usage fields (undocumented format; may change between versions).")
     out.append("\n" + render.LEGEND)

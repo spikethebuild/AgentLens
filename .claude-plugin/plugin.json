@@ -1,6 +1,6 @@
 {
   "name": "agentlens",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Find out where your coding agent's tokens and cache went, and how to waste less. Local-first, zero LLM calls.",
   "author": {
     "name": "Siddharth"

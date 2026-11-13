@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 
 from agentlens import render, store
 
+SEARCH_TOOLS = {"Read", "Grep", "Glob", "LS"}
+
 
 @dataclass
 class Turn:
@@ -31,6 +33,17 @@ class Turn:
     sub_requests: list[sqlite3.Row] = field(default_factory=list)   # subagents
     tools: dict[str, int] = field(default_factory=dict)
     failures: int = 0
+    output_chars: int = 0          # stdout + stderr characters tool calls returned [obs]
+
+    @property
+    def searches(self) -> int:
+        """File reads and searches (Read, Grep, Glob, LS) in this turn."""
+        return sum(n for name, n in self.tools.items() if name in SEARCH_TOOLS)
+
+    @property
+    def start_context(self) -> int | None:
+        """Context of the turn's first main-conversation request."""
+        return _ctx(self.requests[0]) if self.requests else None
 
     @property
     def all_requests(self) -> list[sqlite3.Row]:
@@ -106,6 +119,11 @@ def session_turns(conn: sqlite3.Connection, provider: str, session_id: str,
             t.tools[e["tool_name"]] = t.tools.get(e["tool_name"], 0) + 1
         elif e["type"] == "tool.failure":
             turn_at(e["ts"]).failures += 1
+        elif e["type"] == "tool.post":
+            resp = render.parse_data(e["data"]).get("response") or {}
+            if isinstance(resp, dict):
+                turn_at(e["ts"]).output_chars += sum(
+                    v for k, v in resp.items() if k in ("stdout_chars", "stderr_chars") and isinstance(v, int))
     if not turns[0].all_requests and not turns[0].tools:
         turns.pop(0)
     return turns

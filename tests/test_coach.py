@@ -259,3 +259,51 @@ def test_many_long_sessions_are_folded(tmp_path):
     assert longs[-1].title.startswith("3 more sessions") or any(f.title.startswith("3 more sessions") for f in longs)
     shown = [f for f in longs if f.title.startswith("Session ")]
     assert [f.evidence[0] for f in shown] == ["session 00000005", "session 00000004", "session 00000003"]
+
+
+# ------------------------------------------------------------ expensive prompts
+
+
+def _prompt_session(tmp_path, prompt="fix it", capture=False, contexts=(300_000,) * 25, bash_out=0):
+    """One session: a tiny first prompt, then a prompt whose turn runs `contexts` requests."""
+    lines = request_lines(f"req_{SID[:4]}_a", T0 + 2, read=0, write=10_000, session_id=SID)
+    for i, ctx in enumerate(contexts):
+        lines += request_lines(f"req_{SID[:4]}_{i}", T0 + 20 + i, read=ctx - 1000, write=1000, session_id=SID)
+    path = write(tmp_path / f"{SID}.jsonl", lines)
+    big = copy.deepcopy(load_fixture("user_prompt_submit"))
+    big.update(session_id=SID, cwd=PROJECT, prompt=prompt)
+    extra = hook("user_prompt_submit", T0 + 1, prompt="hello") + normalize(big, T0 + 10, {"capture_prompts": capture})
+    for i in range(9):
+        extra += hook("pre_tool_use_read", T0 + 11 + i * 0.1, tool_use_id=f"toolu_r{i}")
+    if bash_out:
+        post = hook("post_tool_use_bash", T0 + 15)
+        post[0].data["response"] = {"stdout_chars": bash_out, "stderr_chars": 0}
+        extra += post
+    spool.write_events(hook("session_start", T0 - 5, transcript_path=str(path)) + extra)
+    from agentlens.ingest import ingest
+
+    ingest()
+
+
+def test_heavy_prompt_names_the_prompt_and_gives_tips(tmp_path):
+    _prompt_session(tmp_path, bash_out=50_000)
+    rep = analyze()
+    (f,) = [f for f in rep.findings if f.rule == "heavy_prompt"]
+    assert "used 7.50M tokens" in f.title and "[calc]" in f.title
+    assert f.evidence[0] == "prompt text not stored (6 chars; opt in with capture_prompts)"
+    assert "prompt.submit" in f.evidence[1] and f.evidence[2].startswith("largest request req_")
+    assert "A 6-character prompt led to 25 requests" in f.fix
+    assert "9 file reads/searches" in f.fix
+    assert "Tool output was 50k characters" in f.fix
+    assert "new session" not in f.fix and "/clear" not in f.fix
+
+
+def test_heavy_prompt_quotes_captured_text_redacted(tmp_path):
+    _prompt_session(tmp_path, prompt="rewrite the parser sk-ant-api03-SECRETSECRETSECRET please", capture=True)
+    (f,) = [f for f in analyze().findings if f.rule == "heavy_prompt"]
+    assert f.evidence[0].startswith('prompt: "rewrite the parser') and "SECRETSECRET" not in f.evidence[0]
+
+
+def test_small_prompts_are_not_flagged(tmp_path):
+    _prompt_session(tmp_path, contexts=(50_000,) * 5)
+    assert "heavy_prompt" not in rules(analyze())

@@ -4,7 +4,7 @@ All notable changes to AgentLens are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow the
 milestones in `CLAUDE.md` (see "Versioning").
 
-## [Unreleased]
+## [0.1.2] - 2026-11-13
 
 ### Added
 - The plugin asks once per interactive session whether to open the Terminal
@@ -15,6 +15,11 @@ milestones in `CLAUDE.md` (see "Versioning").
   API request with context, cache read/write, uncached and output tokens, cache
   misses marked with their cause, and the session's cache and coach findings
   with their evidence.
+- Coach rule **heavy_prompt**: names each prompt whose turn used ≥2M tokens and
+  ≥20% of its session, quotes it (redacted, only with `capture_prompts`) or gives
+  its length, and suggests how to word it more cheaply from what the turn did
+  (short prompt → many requests, file searches, tool output, failures, starting
+  context). Shown in `agentlens coach`, the Coach panel and the session tab.
 - Dashboard: **Prompts** tab per session (`u`): token use per prompt, largest
   first (`s` re-sorts by time), with requests, share, peak context, output, tool
   calls and the largest request. Requests are attributed to the prompt before
