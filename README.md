@@ -179,7 +179,7 @@ The plugin also ships a pane for Claude Code itself (Claude Code v2.1.287+). It 
 
 It refreshes every 3 seconds and after each turn while open; nothing runs while it is closed. It is read-only: it runs `agentlens pane-data` through the plugin's launcher and never touches a tool call. Claude Code calls this plugin API (a "mod") **early access**, so it may change between releases; recording does not depend on it, and you can turn the plugin's mod off in `/plugin`. `agentlens pane-data [--session ID]` prints the same data as JSON.
 
-**`/agentlens-dashboard`** opens the full dashboard in a new Terminal.app window (macOS) and brings it to the front. It never opens by itself. Like `/agentlens`, it runs no model turn and costs no tokens.
+**`/agentlens-dashboard`** opens the full dashboard in a new Terminal.app window (macOS), or brings Terminal to the front when a dashboard is already running. It never opens by itself: when an interactive session starts, the plugin asks **"Open the AgentLens dashboard in a Terminal window?"** with *Open dashboard*, *Not now* and *Don't ask again* (remembered across sessions). To turn the question off, set **Ask to open the dashboard when a session starts** (`askDashboard`) for the plugin in `/config`. Like `/agentlens`, it runs no model turn and costs no tokens.
 
 ## What AgentLens costs in tokens
 

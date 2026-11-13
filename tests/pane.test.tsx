@@ -167,3 +167,82 @@ test('/agentlens-dashboard opens the Terminal dashboard through the launcher', a
   expect(argv?.[1]).toMatch(/\/hooks\/run\.sh$/)
   await closePane($)
 })
+
+// ---- start-up question: open the Terminal dashboard? ($.ui.ask)
+
+function asker(on: any, answer: string | null) {
+  const asked: string[] = []
+  const toasts: string[] = []
+  const store = new Map<string, unknown>()
+  on('store.get', (_: unknown, e: { key: string }) => ({ value: store.get(e.key) }))
+  on('store.set', (_: unknown, e: { key: string; value: unknown }) => {
+    store.set(e.key, e.value)
+    return { value: undefined }
+  })
+  // $.ui.ask is an AskUserQuestion tool call beneath the plugin.
+  on('tool.call', { tool: 'AskUserQuestion' }, (_: unknown, e: any) => {
+    const qs = e.questions ?? e.input?.questions
+    const q = qs[0]
+    asked.push(q.question)
+    if (answer === null) return { deny: 'dismissed' }
+    return { result: { questions: qs, answers: { [q.question]: answer } } }
+  })
+  on('ui.toast', (_: unknown, e: { text: string }) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
+  return { asked, toasts, store }
+}
+
+// The question is not awaited by session.start; let it settle.
+const settle = async () => { for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 0)) }
+
+test('session start asks once; "Open dashboard" runs the launcher', async ($, on) => {
+  const eng = engine(on, { stdout: 'Opened the AgentLens dashboard in a new Terminal window.' })
+  const ui = asker(on, 'Open dashboard')
+  await $.session.start(START)
+  await settle()
+  expect(ui.asked).toEqual(['Open the AgentLens dashboard in a Terminal window?'])
+  expect(eng.ran.some(a => a.includes('--window'))).toBe(true)
+  expect(ui.toasts[0]).toContain('Opened the AgentLens dashboard')
+  await $.session.start(START) // a reload does not ask again
+  await settle()
+  expect(ui.asked.length).toBe(1)
+  await closePane($)
+})
+
+test('"Not now" or dismissing opens nothing', async ($, on) => {
+  const eng = engine(on)
+  asker(on, null)
+  await $.session.start(START)
+  await settle()
+  expect(eng.ran.some(a => a.includes('--window'))).toBe(false)
+  await closePane($)
+})
+
+test('"Don\'t ask again" is remembered across sessions', async ($, on) => {
+  engine(on)
+  const ui = asker(on, "Don't ask again")
+  await $.session.start(START)
+  await settle()
+  expect(ui.store.get('dashboardNeverAsk')).toBe(true)
+  expect(ui.toasts[0]).toContain('/agentlens-dashboard')
+  await closePane($)
+})
+
+test('askDashboard off: no question, no -p question', { options: { askDashboard: false } }, async ($, on) => {
+  engine(on)
+  const ui = asker(on, 'Open dashboard')
+  await $.session.start(START)
+  await settle()
+  expect(ui.asked).toEqual([])
+  await closePane($)
+})
+
+test('no question in a -p run', async ($, on) => {
+  engine(on)
+  const ui = asker(on, 'Open dashboard')
+  await $.session.start({ cwd: '/', surface: null, isInteractive: false })
+  await settle()
+  expect(ui.asked).toEqual([])
+})

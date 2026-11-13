@@ -32,8 +32,15 @@ const EMPTY: PaneView = { data: null, error: null, live: [], contextPercent: nul
 // Change the tag when PaneView's fields change: it declines what an earlier version stored.
 const view = atom({ plugin: 'agentlens', key: 'view' } as const, EMPTY, { shape: 'view-1' })
 const dismissed = atom({ plugin: 'agentlens', key: 'dismissed' } as const, false, { shape: 'dismissed-1' })
+const dashboardAsked = atom({ plugin: 'agentlens', key: 'dashboardAsked' } as const, false, { shape: 'asked-1' })
 
-type Options = { autoOpenPane?: boolean }
+// The start-up question. "Never ask" is kept in $.store (across sessions).
+const NEVER_ASK_KEY = 'dashboardNeverAsk'
+const ASK_YES = 'Open dashboard'
+const ASK_NO = 'Not now'
+const ASK_NEVER = "Don't ask again"
+
+type Options = { autoOpenPane?: boolean; askDashboard?: boolean }
 
 // ---------------------------------------------------------------- formatting
 
@@ -157,10 +164,35 @@ async function openDashboard($: EngineInterface): Promise<string> {
   return text || `agentlens exited ${ran.exitCode}`
 }
 
+/**
+ * Once per session (not on reloads): ask whether to open the Terminal dashboard.
+ * Not awaited by session.start, so the session never waits on the answer.
+ */
+async function askDashboard($: EngineInterface): Promise<void> {
+  if (await read($, dashboardAsked)) return
+  await update($, dashboardAsked, () => true)
+  if ((await $.store.get(NEVER_ASK_KEY)) === true) return
+  let answer: string
+  try {
+    answer = await $.ui.ask('Open the AgentLens dashboard in a Terminal window?', {
+      options: [ASK_YES, ASK_NO, ASK_NEVER],
+      header: 'AgentLens',
+    })
+  } catch {
+    return // dismissed: same as "Not now"
+  }
+  if (answer === ASK_YES) $.ui.toast(await openDashboard($))
+  else if (answer === ASK_NEVER) {
+    await $.store.set(NEVER_ASK_KEY, true)
+    $.ui.toast('AgentLens will not ask again. /agentlens-dashboard opens it any time.')
+  }
+}
+
 // ---------------------------------------------------------------- hooks
 
 export const register: Register = (on, options) => {
   const autoOpen = (options as Options | undefined)?.autoOpenPane !== false
+  const ask = (options as Options | undefined)?.askDashboard !== false
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -173,7 +205,10 @@ export const register: Register = (on, options) => {
       description: 'Open the full AgentLens dashboard in a Terminal window (macOS, local, no tokens)',
       immediate: true,
     })
-    if (e.isInteractive) await onStart($, autoOpen)
+    if (e.isInteractive) {
+      await onStart($, autoOpen)
+      if (ask) void askDashboard($).catch(() => undefined)
+    }
     return next(e)
   }).catch(($, e, next) => (next.called ? undefined : next(e))) // never hold up a session start
 
@@ -292,7 +327,7 @@ export const register: Register = (on, options) => {
         {(v.data?.events ?? []).slice(-6).map(ev => (
           <Text color={DIM}>{`${clock(ev.ts, now)} ${ev.type} ${ev.detail}`.slice(0, width)}</Text>
         ))}
-        <Text color={DIM}>{v.refreshedAt ? `updated ${new Date(v.refreshedAt).toLocaleTimeString()} · /agentlens closes` : ''}</Text>
+        <Text color={DIM}>{v.refreshedAt ? `updated ${new Date(v.refreshedAt).toLocaleTimeString()} · /agentlens-dashboard full view · /agentlens closes` : ''}</Text>
       </Box>
     )
   })

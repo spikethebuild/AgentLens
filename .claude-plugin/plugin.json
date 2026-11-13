@@ -21,6 +21,12 @@
       "title": "Open the AgentLens pane when a session starts",
       "description": "Shows the pane beside the conversation in interactive sessions. /agentlens still opens and closes it.",
       "default": true
+    },
+    "askDashboard": {
+      "type": "boolean",
+      "title": "Ask to open the dashboard when a session starts",
+      "description": "Shows a Yes/No question at session start; Yes opens the full dashboard in a Terminal window (macOS). /agentlens-dashboard still works.",
+      "default": true
     }
   }
 }

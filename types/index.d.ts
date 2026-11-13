@@ -60,6 +60,8 @@ declare module 'claude-code' {
       view: Shaped<PaneView>
       /** True once the person closed the pane this session: a reload must not reopen it. */
       dismissed: Shaped<boolean>
+      /** True once this session asked whether to open the dashboard: a reload must not ask again. */
+      dashboardAsked: Shaped<boolean>
     }
   }
 }

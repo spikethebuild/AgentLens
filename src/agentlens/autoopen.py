@@ -191,7 +191,13 @@ def open_on_request() -> tuple[bool, str]:
     if sys.platform != "darwin":
         return False, "Opening the dashboard in a window is supported on macOS only; run `agentlens` in a terminal."
     if dashboard_running():
-        return False, "The AgentLens dashboard is already open in a Terminal window."
+        # Only one dashboard runs; bring Terminal (where it usually lives) to the front.
+        subprocess.Popen(
+            ["open", "-a", "Terminal"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True,
+        )
+        return False, ("The AgentLens dashboard is already open; brought Terminal to the front. "
+                       "Press q there to close it.")
     python = dashboard_python()
     if python is None:
         return False, ("No Python with the dashboard installed was found. Install `agentlens-local[tui]` "

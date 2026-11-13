@@ -4,6 +4,18 @@ All notable changes to AgentLens are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow the
 milestones in `CLAUDE.md` (see "Versioning").
 
+## [Unreleased]
+
+### Added
+- The plugin asks once per interactive session whether to open the Terminal
+  dashboard (Open dashboard / Not now / Don't ask again), through Claude Code's
+  own question dialog. Option `askDashboard` (default on) turns it off.
+- The pane's footer names `/agentlens-dashboard`.
+
+### Changed
+- `agentlens dashboard --window` (and `/agentlens-dashboard`) brings Terminal to
+  the front when a dashboard is already running, instead of only saying so.
+
 ## [0.1.1] - 2026-11-13
 
 First public release, published to PyPI as `agentlens-local`.

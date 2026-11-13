@@ -134,7 +134,8 @@ def test_window_on_request_when_already_open(popen):
         opened, msg = autoopen.open_on_request()
     finally:
         autoopen.clear_running()
-    assert not opened and "already open" in msg and popen == []
+    assert not opened and "already open" in msg
+    assert popen == [["open", "-a", "Terminal"]]  # brings the existing window forward, no new one
 
 
 def test_window_without_a_dashboard_python(popen, monkeypatch):
