@@ -8,8 +8,9 @@ name and Anthropic publishes no token limit, so AgentLens shows neither.
 
 Rules (same spirit as the hook fast path):
 * Standard library only; never touches SQLite.
-* Reads only ``session_id``, ``cwd`` and ``rate_limits``. Nothing else from the
-  payload is kept.
+* Stores only ``session_id``, ``cwd`` and ``rate_limits``. It also *displays*
+  the model name, ``context_window.used_percentage`` and ``prompt_cache``
+  (hit ratio, misses, warm/ttl) but never writes them anywhere.
 * Always prints a line and exits 0: a non-zero exit or empty output blanks the
   user's status bar.
 * The latest snapshot goes to ``$AGENTLENS_HOME/plan_usage.json`` (atomic, 0600).
@@ -178,6 +179,59 @@ def render_line(snap: dict | None, now: float) -> str:
     return " · ".join(bits)
 
 
+def _clean(text: str, limit: int = 24) -> str:
+    """Printable text only: the status bar must not carry escape sequences from input."""
+    return "".join(c for c in text if c.isprintable())[:limit]
+
+
+def session_line(payload: Any) -> str | None:
+    """Model, context use and prompt-cache health from Claude Code's own status line input.
+
+    Display only: none of these values is stored. Each part is left out when Claude
+    Code has not reported it yet (``null`` early in a session, absent before the
+    first response).
+    """
+    if not isinstance(payload, dict):
+        return None
+    bits = []
+    model = payload.get("model")
+    if isinstance(model, dict):
+        name = model.get("display_name") or model.get("id")
+        if isinstance(name, str) and name.strip():
+            bits.append(_clean(name.strip()))
+    cw = payload.get("context_window")
+    if isinstance(cw, dict):
+        used = _num(cw.get("used_percentage"))
+        if used is not None and 0 <= used <= 100:
+            bits.append(f"ctx {used:.0f}%")
+    pc = payload.get("prompt_cache")
+    if isinstance(pc, dict):
+        ratio = _num(pc.get("hit_ratio"))
+        if ratio is not None and 0 <= ratio <= 1:
+            bit = f"cache {ratio:.0%} hit"
+            misses = _num(pc.get("misses"))
+            if misses is not None and misses >= 0:
+                bit += f", {misses:.0f} miss" + ("" if misses == 1 else "es")
+            warm, ttl = pc.get("warm"), pc.get("ttl")
+            state = [x for x in ("warm" if warm is True else "cold" if warm is False else None,
+                                 _clean(ttl, 4) if isinstance(ttl, str) and ttl else None) if x]
+            if state:
+                bit += f" ({', '.join(state)})"
+            bits.append(bit)
+    return " · ".join(bits) or None
+
+
+def render(payload: Any, snap: dict | None, now: float) -> str:
+    """The AgentLens rows: plan usage, then the session line. Never empty."""
+    rows = []
+    if current_windows(snap, now):
+        rows.append(render_line(snap, now))
+    extra = session_line(payload)
+    if extra:
+        rows.append(extra)
+    return "\n".join(rows) or render_line(snap, now)
+
+
 def _run_previous(raw: bytes) -> str:
     try:
         prev = json.loads(previous_path().read_text())
@@ -201,10 +255,11 @@ def run() -> int:
         raw = sys.stdin.buffer.read(MAX_PAYLOAD_BYTES + 1)
         if len(raw) > MAX_PAYLOAD_BYTES:
             raise ValueError(f"status line payload too large ({len(raw)} bytes)")
-        snap = parse(json.loads(raw), received_at)
+        payload = json.loads(raw)
+        snap = parse(payload, received_at)
         if snap is not None:
             record(snap)
-        line = render_line(snap, received_at)
+        line = render(payload, snap, received_at)
     except BaseException as exc:  # noqa: BLE001 - must never blank the status bar
         try:
             from agentlens.errlog import log_error

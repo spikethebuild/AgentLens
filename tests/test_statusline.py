@@ -95,7 +95,10 @@ def test_never_blank_never_fails(monkeypatch, capsys, body):
 
 
 def test_no_rate_limits_says_not_reported(monkeypatch, capsys):
-    assert run_cli(monkeypatch, capsys, payload(five=None, week=None)).strip() == "AgentLens · plan usage not reported"
+    body = payload(five=None, week=None)
+    del body["model"]  # nothing else to show either
+    assert run_cli(monkeypatch, capsys, body).strip() == "AgentLens · plan usage not reported"
+    assert run_cli(monkeypatch, capsys, payload(five=None, week=None)).strip() == "claude-opus-5-5"
 
 
 def test_expired_window_is_dropped():
@@ -108,7 +111,7 @@ def test_previous_status_line_runs_below(monkeypatch, capsys):
     paths.ensure_dir(paths.home())
     statusline.previous_path().write_text(json.dumps({"statusLine": {"type": "command", "command": "cat >/dev/null; echo mine"}}))
     out = run_cli(monkeypatch, capsys, payload()).splitlines()
-    assert out[0].startswith("session 24%") and out[1] == "mine"
+    assert out[0].startswith("session 24%") and out[1] == "claude-opus-5-5" and out[2] == "mine"
 
 
 def test_failing_or_slow_previous_status_line_is_skipped(monkeypatch, capsys):
@@ -117,7 +120,7 @@ def test_failing_or_slow_previous_status_line_is_skipped(monkeypatch, capsys):
     for cmd in ("exit 3", "sleep 5"):
         statusline.previous_path().write_text(json.dumps({"statusLine": {"command": cmd}}))
         out = run_cli(monkeypatch, capsys, payload()).splitlines()
-        assert len(out) == 1 and out[0].startswith("session")
+        assert len(out) == 2 and out[0].startswith("session") and "mine" not in out
 
 
 def test_subprocess_fast_path(subprocess_env):
@@ -227,3 +230,51 @@ def test_tokens_since(tmp_path):
     assert store.tokens_since(conn, 1500.0) == {"requests": 1, "input": 102, "output": 9}
     assert store.tokens_since(conn, 0)["requests"] == 2
     conn.close()
+
+
+# ------------------------------------------------------------ session line
+
+
+def full_payload(**over):
+    p = payload()
+    p.update({
+        "model": {"id": "claude-opus-5-5", "display_name": "Opus"},
+        "context_window": {"used_percentage": 41.4, "remaining_percentage": 58.6},
+        "prompt_cache": {"hit_ratio": 0.972, "misses": 2, "warm": True, "ttl": "1h", "requests": 90},
+    })
+    p.update(over)
+    return p
+
+
+def test_two_rows_plan_then_session(monkeypatch, capsys):
+    out = run_cli(monkeypatch, capsys, full_payload()).splitlines()
+    assert out[0].startswith("session 24% · resets ") and out[0].endswith("week 41%")
+    assert out[1] == "Opus · ctx 41% · cache 97% hit, 2 misses (warm, 1h)"
+
+
+def test_session_line_skips_unreported_values():
+    assert statusline.session_line(full_payload(context_window={"used_percentage": None},
+                                                prompt_cache=None)) == "Opus"
+    assert statusline.session_line({"prompt_cache": {"hit_ratio": None}}) is None
+    assert statusline.session_line({"prompt_cache": {"hit_ratio": 1.0, "misses": 1, "warm": False}}) == \
+        "cache 100% hit, 1 miss (cold)"
+    for bad in ({"model": {"display_name": 5}}, {"context_window": {"used_percentage": 140}},
+                {"prompt_cache": {"hit_ratio": 7}}, {"context_window": "x"}, [], None):
+        assert statusline.session_line(bad) is None
+
+
+def test_session_line_strips_escape_sequences():
+    line = statusline.session_line({"model": {"display_name": "\x1b[31mOpus\x07"}})
+    assert "\x1b" not in line and "\x07" not in line and "Opus" in line
+
+
+def test_api_key_session_shows_only_session_row(monkeypatch, capsys):
+    out = run_cli(monkeypatch, capsys, full_payload(rate_limits={})).splitlines()
+    assert out == ["Opus · ctx 41% · cache 97% hit, 2 misses (warm, 1h)"]
+
+
+def test_session_values_are_never_stored(monkeypatch, capsys):
+    run_cli(monkeypatch, capsys, full_payload())
+    blob = statusline.snapshot_path().read_text() + "".join(p.read_text() for p in spool.pending())
+    for forbidden in ("Opus", "hit_ratio", "used_percentage\": 41.4", "0.972"):
+        assert forbidden not in blob
