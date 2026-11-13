@@ -185,8 +185,11 @@ def status_cell(status: str) -> Text:
 
 
 def state_cell(s: sqlite3.Row) -> Text:
-    if render.session_state(s) == "open":
-        return Text("● open", style=VIOLET)
+    state = render.session_state(s)
+    if state == "active":
+        return Text("● active", style=VIOLET)
+    if state == "idle":
+        return Text("○ idle", style=MUTED)
     return Text("ended", style=DIM)
 
 
@@ -337,7 +340,7 @@ class SessionsScreen(Screen):
         yield TopBar(id="topbar")
         with Horizontal(id="tiles"):
             yield Tile("Sessions", "[calc]", id="t-sessions")
-            yield Tile("Open now", "[calc]", id="t-open")
+            yield Tile("Active now", "[calc]", id="t-open")
             yield Tile("Tool calls", "[calc]", id="t-tools")
             yield Tile("Failed", "[calc]", id="t-failed")
             yield Tile("Failure rate", "[calc]", id="t-rate")
@@ -391,8 +394,8 @@ class SessionsScreen(Screen):
         self._refresh_title()
 
     def active_session(self) -> sqlite3.Row | None:
-        """The most recently active open session in the selected project."""
-        open_now = [s for s in self._in_project() if render.session_state(s) == "open"]
+        """The most recent active session (no SessionEnd, events within the hour) in the project."""
+        open_now = [s for s in self._in_project() if render.is_active(s)]
         return max(open_now, key=lambda s: s["last_seen"], default=None)
 
     def _refresh_usage(self) -> None:
@@ -400,7 +403,7 @@ class SessionsScreen(Screen):
         conn = self.app.conn
         s = self.active_session()
         if s is None:
-            active: list = [("session", f"{render.UNAVAILABLE} (no open session in this project)", "")]
+            active: list = [("session", f"{render.UNAVAILABLE} (no active session in this project)", "")]
         else:
             usage = store.session_usage(conn, s["provider"], s["session_id"])
             reason = None if usage["requests"] else cache.usage_reason(conn, s["provider"], s["session_id"])
@@ -458,7 +461,7 @@ class SessionsScreen(Screen):
 
     def _refresh_tiles(self) -> None:
         scope = self._in_project()
-        n_open = sum(1 for s in scope if render.session_state(s) == "open")
+        n_open = sum(1 for s in scope if render.is_active(s))
         n_tools = sum(s["tool_calls"] for s in scope)
         n_failed = sum(s["tool_failures"] for s in scope)
         self.query_one("#t-sessions", Tile).set(str(len(scope)))
@@ -719,7 +722,7 @@ class SessionScreen(Screen):
         if s["started_at"] is None:
             dur.set("-")
         else:
-            is_open = render.session_state(s) == "open"
+            is_open = not render.is_ended(s)
             end = s["last_seen"] if is_open else s["ended_at"]
             value, unit = split_duration((end - s["started_at"]) * 1000)
             dur.set(value, f"{unit} so far" if is_open else unit)

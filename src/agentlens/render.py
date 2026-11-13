@@ -16,6 +16,8 @@ import sqlite3
 import time
 from typing import Any, Iterable, Sequence
 
+from agentlens import errors
+
 OBS, CALC, EST, CLK = "[obs]", "[calc]", "[est]", "[clk]"
 UNAVAILABLE = "unavailable"
 
@@ -96,19 +98,49 @@ def kv(rows: Sequence[tuple[str, str, str]]) -> str:
 # ------------------------------------------------------------- session logic
 
 
-def session_state(s: sqlite3.Row) -> str:
-    if s["ended_at"] is not None and s["ended_at"] >= s["last_seen"]:
+# A session with no SessionEnd is "active" while events keep arriving and "idle"
+# once it has been quiet this long. Closing the terminal or a crash sends no
+# SessionEnd, so without this such sessions would look open forever. Neither label
+# claims the session ended: AgentLens cannot know that.
+IDLE_AFTER_S = 60 * 60
+
+
+def is_ended(s: sqlite3.Row) -> bool:
+    return s["ended_at"] is not None and s["ended_at"] >= s["last_seen"]
+
+
+def session_state(s: sqlite3.Row, now: float | None = None) -> str:
+    """"ended (<reason>)", "active" or "idle" (no SessionEnd, quiet > IDLE_AFTER_S)."""
+    if is_ended(s):
         return f"ended ({s['end_reason'] or 'reason unavailable'})"
-    return "open"
+    now = time.time() if now is None else now
+    return "active" if now - last_activity(s) <= IDLE_AFTER_S else "idle"
+
+
+def last_activity(s: sqlite3.Row) -> float:
+    """Time of the session's last hook event.
+
+    Status-line refreshes also record ``plan.usage`` events, and Claude Code runs
+    the status line for idle sessions too, so they do not count as activity.
+    """
+    try:
+        ts = s["last_activity"]
+    except (IndexError, KeyError):
+        ts = None
+    return ts if ts is not None else s["last_seen"]
+
+
+def is_active(s: sqlite3.Row, now: float | None = None) -> bool:
+    return session_state(s, now) == "active"
 
 
 def session_duration(s: sqlite3.Row) -> tuple[str, str]:
     """(text, tag). Never derived from the first *seen* event: that would be a guess."""
     if s["started_at"] is None:
         return f"{UNAVAILABLE} (no SessionStart)", ""
-    if s["ended_at"] is not None and s["ended_at"] >= s["last_seen"]:
+    if is_ended(s):
         return fmt_duration_ms((s["ended_at"] - s["started_at"]) * 1000), CALC
-    return "≥ " + fmt_duration_ms((s["last_seen"] - s["started_at"]) * 1000) + " (open)", CALC
+    return "≥ " + fmt_duration_ms((s["last_seen"] - s["started_at"]) * 1000) + " (no SessionEnd)", CALC
 
 
 def tool_summary(tool_name: str | None, data_json: str | None) -> str:
@@ -206,7 +238,9 @@ def tool_call_fields(call: sqlite3.Row) -> list[tuple[str, str, str]]:
     if res.get("is_interrupt"):
         rows.append(("interrupted", "yes (user interrupt)", OBS))
     if res.get("error"):
-        rows.append(("error", str(res["error"]), OBS))
+        rows.append(("error", errors.headline(str(res["error"])) or str(res["error"]), OBS))
+    if res.get("error_chars"):
+        rows.append(("error size", f"{res['error_chars']} chars, {res.get('error_lines', '?')} lines (rest not stored)", OBS))
     return rows
 
 
@@ -215,8 +249,15 @@ def error_events(events: Sequence[sqlite3.Row]) -> list[sqlite3.Row]:
 
 
 def error_message(e: sqlite3.Row) -> str:
+    """One line: ``exit N · <headline>`` for tool failures, ``<error>: <details>`` for turns.
+
+    Events recorded before 0.1.1 hold up to 1000 chars of raw output; the headline
+    is re-derived here so they read the same as new ones.
+    """
     data = parse_data(e["data"])
-    msg = data.get("error") or ""
+    msg = errors.headline(str(data.get("error") or ""))
+    if data.get("exit_code") is not None:
+        msg = f"exit {data['exit_code']}" + (f" · {msg}" if msg else "")
     if data.get("error_details"):
         msg += f": {data['error_details']}"
     return msg or UNAVAILABLE
@@ -327,7 +368,7 @@ def session_overview_rows(
     )
     ended = (
         f"{fmt_ts(s['ended_at'])} ({s['end_reason'] or 'reason unavailable'})"
-        if s["ended_at"] else "no SessionEnd received (open, or ended without the hook running)"
+        if s["ended_at"] else "no SessionEnd received (still running, or closed without the hook firing)"
     )
     rows = [
         ("provider", s["provider"], ""),

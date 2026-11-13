@@ -322,6 +322,6 @@ def test_home_shows_active_session_and_plan_usage(tmp_path):
 
 def test_home_usage_panels_when_nothing_is_available():
     async def check(app, pilot):
-        assert "no open session" in app.screen.active_rows[0][1]
+        assert "no active session" in app.screen.active_rows[0][1]
         assert "agentlens statusline install" in app.screen.plan_rows[0][1]
     drive(check)

@@ -138,9 +138,16 @@ def tool_event_id(provider: str, session_id: str, event_name: str, tool_use_id: 
 
 
 def payload_event_id(provider: str, payload: dict, ts: float) -> str:
-    """ID for non-tool events: canonical payload plus timestamp truncated to the second.
+    """ID for non-tool events, computed in memory; only the digest is persisted.
 
-    Computed in memory from the raw payload; only the digest is ever persisted.
+    A payload carrying a ``prompt_id`` is already unique to one turn, so its ID is
+    the canonical payload alone. Then the plugin's and the settings' copies of the
+    same hook (Claude Code runs both) get one ID even when they are received in
+    different seconds. Payloads without one (SessionStart, SessionEnd,
+    InstructionsLoaded, ...) add the timestamp truncated to the second, so a real
+    repeat later in the session is kept.
     """
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    if isinstance(payload.get("prompt_id"), str) and payload["prompt_id"]:
+        return _sha256(provider, canonical)
     return _sha256(provider, canonical, str(int(ts)))

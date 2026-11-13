@@ -146,8 +146,8 @@ It refreshes every 3 seconds and after each turn while open; nothing runs while 
 
 Run `agentlens` with no arguments (or `agentlens dashboard`) to open the terminal dashboard.
 
-- **Home:** headline tiles (sessions, open now, tool calls, failed, failure rate, average tool time) for the selected project, then **Active session** (the most recent open session's tokens in/out, cache read/written and hit ratio) and **Plan usage** (see above). Below them are your projects, every recorded session (open or ended, newest first) and a live activity feed across all sessions. `/` opens a filter (ID, project, model or state), `f` shows only sessions with failed tool calls, `Enter` opens a session.
-- **Session:** tiles for duration, tool calls, failures, prompts, total tool time and tokens in. It opens on **Errors** when the session has any. Each failed call shows its full sanitized command, exit code, status, duration and complete error message. The other tabs are **Tool calls** (select a call to see everything recorded about it), **Timeline** and **Overview**.
+- **Home:** headline tiles (sessions, active now, tool calls, failed, failure rate, average tool time) for the selected project, then **Active session** (the most recent active session's tokens in/out, cache read/written and hit ratio) and **Plan usage** (see above). Below them are your projects, every recorded session (active, idle or ended, newest first) and a live activity feed across all sessions. `/` opens a filter (ID, project, model or state), `f` shows only sessions with failed tool calls, `Enter` opens a session.
+- **Session:** tiles for duration, tool calls, failures, prompts, total tool time and tokens in. It opens on **Errors** when the session has any. Each failed call shows its full sanitized command, exit code, status, duration and error headline and the size of the full output. The other tabs are **Tool calls** (select a call to see everything recorded about it), **Timeline** and **Overview**.
 - **Live:** while the dashboard is open it drains the spool every second and appends new events as they happen. `p` pauses, `r` syncs now, `?` shows the provenance legend, `Esc` goes back, `q` quits.
 
 Every value carries the same `[obs]`/`[calc]`/`[est]`/`[clk]` labels as the CLI. The dashboard never edits Claude Code settings and makes no network calls. Sessions stay in the database after Claude Code exits, so you can review them at any time.
@@ -184,6 +184,7 @@ A value that cannot be known is shown as `unavailable` with the reason. It is ne
 
 - **Token usage** comes from the session transcript's per-request `usage` fields (`[obs]`; one count per API request, subagents included). That format is undocumented, so a session without a readable transcript shows tokens as unavailable with the reason. **Cost** needs pricing and is planned for v0.3.
 - **Session duration** is unavailable when AgentLens missed `SessionStart`, for example if it was installed mid-session.
+- **Session state** is `ended (<reason>)` once `SessionEnd` arrives. Closing the terminal or a crash sends no `SessionEnd`, so until then a session is **active** while hook events arrive and **idle** after an hour without one (status-line refreshes don't count). Neither label claims the session ended; its duration is shown as `≥ …`.
 - **Tool duration** is `[obs]` when Claude Code sends `duration_ms`. Otherwise it is `[calc]` from the Pre/Post receive times. That value includes hook process start-up jitter of tens of milliseconds. If the Post event happened to be stamped before the Pre event, the duration is shown as unavailable.
 
 ## How it works
@@ -210,6 +211,7 @@ What is stored, per event:
 - **Write/Edit/Read:** the file path and sizes. Never the contents.
 - **Other tools:** short scalar arguments, redacted. Long text is reduced to its length, nested data to item counts.
 - **Tool output:** booleans, numbers and text lengths only.
+- **Tool failures:** the exit code, one headline line of the error (redacted, at most 200 characters, picked by fixed rules: the last line that reads like an error, else the last line), and the size of the full output. The rest of the output, which can include file contents, is not stored.
 - **Prompts:** the length and a keyed HMAC (the salt is in `~/.agentlens/salt`). The text itself is not stored. To store redacted, truncated prompt text, opt in with `{"capture_prompts": true}` in `~/.agentlens/config.json`.
 - **Assistant messages:** the length only.
 

@@ -66,5 +66,19 @@ First public release, published to PyPI as `agentlens-local`.
   based on and shows its provenance.
 
 ### Fixed
+- Tool failures no longer store up to 1,000 characters of the command's output,
+  which could include file contents. Only the exit code, a deterministic headline
+  line (at most 200 characters, redacted) and the output's size are kept. Older
+  events are shown with the same headline, so failure lists read
+  `exit 1 · gh: Not Found (HTTP 404)` instead of raw, cut-off output.
+- Sessions without a `SessionEnd` (terminal closed, crash) no longer look open
+  forever: they are **active** while hook events arrive and **idle** after an
+  hour without one. Status-line refreshes don't count as activity. The
+  dashboard's "Active session" panel and "Active now" tile use active sessions
+  only.
+- When both the plugin and the settings hooks are installed, the two copies of
+  a prompt-scoped event (prompt, stop, turn failure, notification) received in
+  different seconds were stored twice. Their event ID now leaves out the
+  timestamp, so they are deduplicated.
 - The user settings path now follows Claude Code's `CLAUDE_CONFIG_DIR`.
 - `inspect` no longer says tokens are unavailable when transcript usage exists.

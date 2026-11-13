@@ -124,7 +124,18 @@ def test_bash_failure_exit_code(fixture):
     ev = norm(fixture, "post_tool_use_failure_bash")
     assert (ev.type, ev.status) == ("tool.failure", "failed")
     assert ev.data["exit_code"] == 2
-    assert ev.data["error"].startswith("Exit code 2\nsrc/cart.ts")
+    # only the headline line and the size of the output are kept
+    assert ev.data["error"] == "src/cart.ts(14,3): error TS2322: Type 'string' is not assignable to type 'number'."
+    assert ev.data["error_lines"] == 2 and ev.data["error_chars"] == len(fixture("post_tool_use_failure_bash")["error"])
+
+
+def test_bash_failure_drops_command_output(fixture):
+    payload = fixture("post_tool_use_failure_bash")
+    payload["error"] = "Exit code 1\n[project]\nname = \"secret-internal\"\nAPI_TOKEN=sk-ant-abcdefghijklmnopqrstuvwx\nfatal: not a git repository"
+    ev = cc.normalize(payload, TS, OFF)[0]
+    assert ev.data["error"] == "fatal: not a git repository"
+    blob = json.dumps(ev.data)
+    assert "secret-internal" not in blob and "sk-ant-" not in blob
 
 
 def test_interrupt(fixture):

@@ -360,6 +360,9 @@ SELECT s.*,
     (SELECT COUNT(*) FROM events e
         WHERE e.provider = s.provider AND e.session_id = s.session_id
           AND e.type = 'prompt.submit')                                       AS prompts,
+    (SELECT MAX(e.ts) FROM events e
+        WHERE e.provider = s.provider AND e.session_id = s.session_id
+          AND e.source = 'hook')                                              AS last_activity,
     (SELECT COUNT(*) FROM api_requests r
         WHERE r.provider = s.provider AND r.session_id = s.session_id)        AS api_requests,
     (SELECT SUM(COALESCE(r.input_tokens, 0) + COALESCE(r.cache_read_tokens, 0)

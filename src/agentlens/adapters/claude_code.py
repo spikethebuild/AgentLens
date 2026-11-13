@@ -10,10 +10,10 @@ prompt text are reduced to sizes/hashes here, before anything reaches disk.
 
 from __future__ import annotations
 
-import re
 from typing import Any, Callable
 
 from agentlens import config as config_mod
+from agentlens import errors
 from agentlens.events import (
     Category,
     Event,
@@ -53,7 +53,6 @@ EVENT_MAP: dict[str, tuple[Category, str, str | None]] = {
 # The hook events `agentlens install` registers.
 HOOK_EVENTS: tuple[str, ...] = tuple(EVENT_MAP)
 
-_EXIT_CODE = re.compile(r"^Exit code (\d+)")
 
 
 # ------------------------------------------------------------ small helpers
@@ -321,10 +320,14 @@ def normalize(payload: Any, received_at: float, cfg: dict | None = None) -> list
             data["is_interrupt"] = True
         error = payload.get("error")
         if isinstance(error, str):
-            m = _EXIT_CODE.match(error)
-            if m:
-                data["exit_code"] = int(m.group(1))
-            data["error"] = clean(error, 1000)
+            # The error text is the command's whole output (it can hold file
+            # contents): keep a one-line headline and its size, never the rest.
+            code = errors.exit_code(error)
+            if code is not None:
+                data["exit_code"] = code
+            _set(data, "error", clean(errors.headline(error), errors.HEADLINE_LIMIT) or None)
+            data["error_chars"] = len(error)
+            data["error_lines"] = error.count("\n") + 1
 
     elif hook == "PermissionDenied":
         _set(data, "reason", clean(payload.get("reason"), 300) if isinstance(payload.get("reason"), str) else None)
