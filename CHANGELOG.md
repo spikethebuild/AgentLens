@@ -4,7 +4,7 @@ All notable changes to AgentLens are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow the
 milestones in `CLAUDE.md` (see "Versioning").
 
-## [0.1.1] - Unreleased
+## [0.1.1] - 2026-11-13
 
 First public release, published to PyPI as `agentlens-local`.
 
