@@ -30,6 +30,7 @@ Then run `/reload-plugins` or start a new session. Every session is recorded fro
 - `/agentlens` opens a live pane beside the conversation (see "Inside Claude Code" below).
 - `/agentlens:cache` prints a five-line cache summary for the current session (it runs locally; its few lines are the only tokens it adds).
 - `/agentlens:status` prints a short health check.
+- `/agentlens:coach` prints the top suggestions to waste fewer tokens in this project.
 
 The plugin's hooks run `hooks/run.sh`, which finds Python 3.10+ (set `AGENTLENS_PYTHON` to choose one), runs the bundled collector and **always exits 0**. If no Python is found, it logs one line to `~/.agentlens/logs/agentlens.log` and does nothing else. Recorded data lives in `~/.agentlens` (or `AGENTLENS_HOME`), so it survives uninstalling or updating the plugin.
 
@@ -67,6 +68,24 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[tui]'   # or -e . for CLI o
 - `agentlens doctor` checks the whole setup and prints a fix for anything wrong.
 
 **Don't use both.** Claude Code runs plugin hooks and settings hooks side by side, so every event would fire twice. `agentlens install` refuses while the plugin is enabled (override with `--force`), and `agentlens status` warns if both are active. To switch to the plugin, run `agentlens uninstall`.
+
+## Cost coach
+
+`agentlens coach` looks across your recent sessions in the current project (last 14 days; `--days`, `--project`, `--all-projects`, `--session`) and lists what is costing you tokens, biggest first. Every suggestion names its sessions and request or event IDs and labels each number `[obs]`, `[calc]` or `[est]`. It makes no model calls.
+
+| Rule | Fires when | Suggests |
+|---|---|---|
+| Long context | a session ran ≥10 requests above 200k tokens of context and they account for ≥30% of its cache reads | `/compact` at a task boundary, or a new session for an unrelated task |
+| Starting context | the median first request across sessions is ≥50k tokens | `/context`, disabling unused plugins, trimming CLAUDE.md |
+| Plugin overhead | an enabled plugin lists ≈2k+ tokens of skills, agents and commands `[est]` and none of its skills, agents or MCP tools were called in ≥3 sessions | disabling it for the project, or installing only the parts you use |
+| Large output | Bash calls returned ≥20k characters | narrower commands (`head`, `grep`, quiet flags) |
+| Cache | the cache report below found a rebuild (idle gap, model switch, effort change, large instruction files) | that rule's fix |
+
+**Plugins that help.** When an enabled plugin ships a skill aimed at the same problem, the suggestion names it. For example, with [ECC](https://github.com/affaan-m/ECC) installed, long-context findings point to `/ecc:strategic-compact`. No plugin is required, and AgentLens never runs one. The report also lists the plugin skills you did use, with how much each call grew the context `[calc]`.
+
+**Limits.** The plugin listing size is an upper bound read from the plugin's own files (Claude Code shortens long listings); `/context` shows the real figure. Where plugins are installed comes from `~/.claude/plugins/installed_plugins.json`, which Claude Code does not document. Slash commands you type are not recorded (AgentLens doesn't store prompt text), so a plugin used only through its commands can look unused. A plugin's hooks run whether or not you call its skills, and what they are worth to you is not measured.
+
+`/agentlens:coach` prints the top three suggestions in five lines.
 
 ## Cache coach
 
@@ -142,7 +161,7 @@ It refreshes every 3 seconds and after each turn while open; nothing runs while 
 | Hooks (recording) | 0: async, no output, nothing added to context |
 | Status line | 0: Claude Code's status line "does not consume API tokens" |
 | `/agentlens` pane, dashboard, CLI | 0: local reads, no model calls |
-| `/agentlens:status`, `/agentlens:cache` skills | 0 until you run one (`disable-model-invocation`); then their 4–5 output lines and Claude's repeat of them enter the conversation, a few hundred tokens per use (estimate) |
+| `/agentlens:status`, `/agentlens:cache`, `/agentlens:coach` skills | 0 until you run one (`disable-model-invocation`); then their 4–5 output lines and Claude's repeat of them enter the conversation, a few hundred tokens per use (estimate) |
 
 ## Dashboard
 
@@ -177,6 +196,7 @@ agentlens dashboard --auto-open on    # opt-in: also open it with every new Clau
 | `agentlens pane-data [--session ID]` | The pane's data as one JSON object (tokens, plan usage, failures, recent events) with provenance. |
 | `agentlens sessions [--limit N]` | Recent sessions: start, duration, state, prompts, tool calls, failures, tokens in/out. |
 | `agentlens inspect <id-or-prefix> [--all]` | One session in detail: overview (including API requests, input/output tokens and cache hit ratio), tool calls, errors, timeline. |
+| `agentlens coach [--days N] [--project DIR\|--all-projects] [--session ID] [--brief]` | Cost coach: suggestions to waste fewer tokens across recent sessions, with evidence. |
 | `agentlens cache [session] [--brief] [--requests]` | Cache coach report: hit ratio, misses, causes with evidence, and fixes. |
 | `agentlens` / `agentlens dashboard [--window] [--auto-open on\|off]` | Opens the terminal dashboard (needs the `tui` extra). Without a terminal, prints help. `--window` (macOS) opens it in a new Terminal window now; `--auto-open on` does that whenever a Claude Code session starts. |
 | `/agentlens-dashboard` (in Claude Code) | Opens the dashboard in a new Terminal window (plugin, macOS). |

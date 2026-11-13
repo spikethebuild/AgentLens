@@ -56,6 +56,13 @@ First public release, published to PyPI as `agentlens-local`.
 - Release docs: README quick start, troubleshooting, uninstall and a list of
   the files AgentLens keeps; `SECURITY.md` (private reporting), `CONTRIBUTING.md`,
   issue templates, and a test that every CLI command is in the README table.
+- Cost coach, first stage (`agentlens coach`, `/agentlens:coach`): long-context,
+  starting-context, plugin-overhead and large-output rules plus the cache
+  report's warnings, across recent sessions of a project, each with its
+  evidence. Names an installed plugin's skill for the same problem (e.g. ECC's
+  `strategic-compact`) when one is enabled. Plugin inventory (`inventory.py`)
+  estimates each enabled plugin's skill/agent/command listing size. Dismissing
+  suggestions and pricing come in later stages.
 - The `/agentlens` pane opens by itself in interactive sessions (plugin option
   `autoOpenPane`, on by default). Once closed, it stays closed for that session.
 - `/agentlens-dashboard` and `agentlens dashboard --window` (macOS): open the

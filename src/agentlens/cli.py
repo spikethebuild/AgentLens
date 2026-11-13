@@ -437,6 +437,27 @@ def cmd_cache(args) -> int:
     return 0
 
 
+def cmd_coach(args) -> int:
+    import os
+
+    from agentlens import coach
+
+    _sync(quiet=args.brief)
+    project = None if args.all_projects else os.path.realpath(args.project or os.getcwd())
+    conn = store.connect()
+    try:
+        try:
+            rep = coach.analyze(conn, project, days=args.days, session_prefix=args.session)
+        except store.AmbiguousSession as exc:
+            print(f"error: '{args.session}' matches several sessions: {', '.join(x[:8] for x in exc.args[0])}",
+                  file=sys.stderr)
+            return 2
+        print(coach.render_brief(rep) if args.brief else coach.render_report(rep))
+    finally:
+        conn.close()
+    return 0
+
+
 def cmd_ingest(args) -> int:
     r = ingest(wait_s=0.0 if args.quiet else READ_LOCK_WAIT_S)
     if not args.quiet:
@@ -589,6 +610,14 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--brief", action="store_true", help="at most five lines (used by the plugin skill)")
     s.add_argument("--requests", action="store_true", help="also list every API request")
     s.set_defaults(func=cmd_cache)
+
+    s = sub.add_parser("coach", help="suggestions to waste fewer tokens, each with its evidence")
+    s.add_argument("--days", type=int, default=14, help="sessions active in the last N days (default 14)")
+    s.add_argument("--project", help="project directory (default: the current directory)")
+    s.add_argument("--all-projects", action="store_true", help="analyse sessions from every project")
+    s.add_argument("--session", help="analyse one session (ID or prefix)")
+    s.add_argument("--brief", action="store_true", help="at most five lines (used by the plugin skill)")
+    s.set_defaults(func=cmd_coach)
 
     s = sub.add_parser("ingest", help="move spooled events into the database")
     s.add_argument("--quiet", action="store_true")
