@@ -6,7 +6,7 @@ using PyPI Trusted Publishing (OIDC). No API token is stored anywhere.
 ## One-time setup (maintainer)
 
 1. **PyPI pending publisher.** On pypi.org → Account → Publishing → "Add a new
-   pending publisher": project `agentlens-local`, owner `SiddharthDevare10`,
+   pending publisher": project `agentlens-local`, owner `spikethebuild`,
    repository `AgentLens`, workflow `release.yml`, environment `pypi`.
    A pending publisher does not reserve the name; the first successful upload does.
 2. **TestPyPI (optional rehearsal).** Same on test.pypi.org with environment `testpypi`.

@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security or privacy problem
-    url: https://github.com/SiddharthDevare10/AgentLens/security/advisories/new
+    url: https://github.com/spikethebuild/AgentLens/security/advisories/new
     about: Report privately, please. Never paste real secrets.

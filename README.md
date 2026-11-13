@@ -29,7 +29,7 @@ These are one project's numbers, not a promise. Savings happen only when you act
 
 ## Quick start
 
-1. In Claude Code: `/plugin marketplace add SiddharthDevare10/AgentLens`, then `/plugin install agentlens@agentlens`. (Before the first release, use a clone: `/plugin marketplace add /path/to/AgentLens`.)
+1. In Claude Code: `/plugin marketplace add spikethebuild/AgentLens`, then `/plugin install agentlens@agentlens`.
 2. In a terminal: `pipx install 'agentlens-local[tui]'` (before the first release: `pip install -e '.[tui]'` in a clone's virtualenv), then `agentlens doctor` (every line should say `ok`).
 3. Work as usual. The AgentLens pane opens beside the conversation in new sessions (`/agentlens` closes or reopens it); `/agentlens-dashboard` opens the full dashboard in a Terminal window (macOS), or run `agentlens` in any terminal.
 4. After a few sessions, run `/agentlens:coach` (or `agentlens coach`) to see what is costing you tokens. Optional: `agentlens statusline install` for plan usage in your status bar.
@@ -43,7 +43,7 @@ Requires Python 3.10+ on macOS or Linux. Recording needs only the standard libra
 In Claude Code:
 
 ```
-/plugin marketplace add SiddharthDevare10/AgentLens
+/plugin marketplace add spikethebuild/AgentLens
 /plugin install agentlens@agentlens
 ```
 
@@ -78,7 +78,7 @@ agentlens install      # only if you are NOT using the plugin
 From a source checkout instead of PyPI:
 
 ```bash
-git clone https://github.com/SiddharthDevare10/AgentLens && cd AgentLens
+git clone https://github.com/spikethebuild/AgentLens && cd AgentLens
 python3 -m venv .venv && .venv/bin/pip install -e '.[tui]'   # or -e . for CLI only
 .venv/bin/agentlens install
 ```

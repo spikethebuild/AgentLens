@@ -6,7 +6,7 @@ careful with other people's data. These notes keep it that way.
 ## Set up
 
 ```bash
-git clone https://github.com/SiddharthDevare10/AgentLens && cd AgentLens
+git clone https://github.com/spikethebuild/AgentLens && cd AgentLens
 python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 .venv/bin/pytest -q
 ```
