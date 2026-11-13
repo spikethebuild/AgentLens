@@ -118,3 +118,45 @@ def test_cli_toggle(capsys, monkeypatch):
     assert autoopen.settings() == (True, sys.executable)
     assert cli.main(["dashboard", "--auto-open", "off"]) == 0
     assert autoopen.settings()[0] is False
+
+
+def test_window_on_request_comes_to_front(popen):
+    enable()
+    opened, msg = autoopen.open_on_request()
+    assert opened and "Opened" in msg
+    assert popen[0][:3] == ["open", "-a", "Terminal"]  # no -g: the person asked for it
+
+
+def test_window_on_request_when_already_open(popen):
+    enable()
+    autoopen.mark_running()
+    try:
+        opened, msg = autoopen.open_on_request()
+    finally:
+        autoopen.clear_running()
+    assert not opened and "already open" in msg and popen == []
+
+
+def test_window_without_a_dashboard_python(popen, monkeypatch):
+    monkeypatch.setattr(autoopen, "dashboard_python", lambda: None)
+    opened, msg = autoopen.open_on_request()
+    assert not opened and "agentlens-local[tui]" in msg and popen == []
+
+
+def test_window_not_on_linux(popen, monkeypatch):
+    monkeypatch.setattr(autoopen.sys, "platform", "linux")
+    opened, msg = autoopen.open_on_request()
+    assert not opened and "macOS only" in msg and popen == []
+
+
+def test_auto_open_off_remembers_dashboard_python(capsys):
+    pytest.importorskip("textual")
+    assert cli.main(["dashboard", "--auto-open", "off"]) == 0
+    assert autoopen.settings() == (False, sys.executable)
+    assert "/agentlens-dashboard" in capsys.readouterr().out
+
+
+def test_cli_window(popen, capsys):
+    enable()
+    assert cli.main(["dashboard", "--window"]) == 0
+    assert "Opened" in capsys.readouterr().out and len(popen) == 1

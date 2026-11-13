@@ -124,7 +124,7 @@ The second row (model, context use, prompt-cache hit ratio and misses) comes str
 
 ## Inside Claude Code: the `/agentlens` pane
 
-The plugin also ships a pane for Claude Code itself (Claude Code v2.1.287+). Type **`/agentlens`** to open a live panel beside the conversation (or above the prompt in a narrow terminal), and `/agentlens` again to close it:
+The plugin also ships a pane for Claude Code itself (Claude Code v2.1.287+). It **opens by itself** when an interactive session starts: beside the conversation from 144 columns wide (110 once you have opened it yourself), above the prompt in a narrower terminal. **`/agentlens`** closes it and opens it again. Once you close it, it stays closed for the rest of that session. To stop it opening by itself, turn off **Open the AgentLens pane when a session starts** (`autoOpenPane`) for the plugin in `/config`. The pane shows:
 
 - **Session:** model, prompts, tool calls and failures.
 - **Tokens:** in (cache read, written, uncached), out, cache hit ratio and API requests, plus context use.
@@ -132,6 +132,8 @@ The plugin also ships a pane for Claude Code itself (Claude Code v2.1.287+). Typ
 - **Failures** and the most recent events.
 
 It refreshes every 3 seconds and after each turn while open; nothing runs while it is closed. It is read-only: it runs `agentlens pane-data` through the plugin's launcher and never touches a tool call. Claude Code calls this plugin API (a "mod") **early access**, so it may change between releases; recording does not depend on it, and you can turn the plugin's mod off in `/plugin`. `agentlens pane-data [--session ID]` prints the same data as JSON.
+
+**`/agentlens-dashboard`** opens the full dashboard in a new Terminal.app window (macOS) and brings it to the front. It never opens by itself. Like `/agentlens`, it runs no model turn and costs no tokens.
 
 ## What AgentLens costs in tokens
 
@@ -152,14 +154,15 @@ Run `agentlens` with no arguments (or `agentlens dashboard`) to open the termina
 
 Every value carries the same `[obs]`/`[calc]`/`[est]`/`[clk]` labels as the CLI. The dashboard never edits Claude Code settings and makes no network calls. Sessions stay in the database after Claude Code exits, so you can review them at any time.
 
-### Open it with every new session (macOS, opt-in)
+### Open it in a window (macOS)
 
 ```
-agentlens dashboard --auto-open on    # run with the agentlens that has the `tui` extra
-agentlens dashboard --auto-open off
+agentlens dashboard --window          # now, in a new Terminal window (what /agentlens-dashboard runs)
+agentlens dashboard --auto-open off   # run once with the agentlens that has the `tui` extra: saves it for --window
+agentlens dashboard --auto-open on    # opt-in: also open it with every new Claude Code session
 ```
 
-When this is on, starting a new Claude Code session opens the dashboard in a new Terminal.app window, behind your editor. It does this only for new sessions (not on resume, `/clear` or compaction), only when no dashboard is already running, and at most once per 15 seconds. It also skips non-interactive runs (`claude -p`, the SDK), using `CLAUDE_CODE_ENTRYPOINT`, which Claude Code doesn't document. The window runs a script at `~/.agentlens/run/dashboard.command` handed to `open -g -a Terminal`, so macOS asks for no Automation permission. It works the same with the plugin and with settings hooks. Skipped launches are logged to `~/.agentlens/logs/agentlens.log`.
+`--window` uses the saved Python, or the current one if it has the `tui` extra, and does nothing if a dashboard is already running. When `--auto-open` is on, starting a new Claude Code session opens the dashboard in a new Terminal.app window, behind your editor. It does this only for new sessions (not on resume, `/clear` or compaction), only when no dashboard is already running, and at most once per 15 seconds. It also skips non-interactive runs (`claude -p`, the SDK), using `CLAUDE_CODE_ENTRYPOINT`, which Claude Code doesn't document. The window runs a script at `~/.agentlens/run/dashboard.command` handed to `open -g -a Terminal`, so macOS asks for no Automation permission. It works the same with the plugin and with settings hooks. Skipped launches are logged to `~/.agentlens/logs/agentlens.log`.
 
 ## Commands
 
@@ -175,7 +178,8 @@ When this is on, starting a new Claude Code session opens the dashboard in a new
 | `agentlens sessions [--limit N]` | Recent sessions: start, duration, state, prompts, tool calls, failures, tokens in/out. |
 | `agentlens inspect <id-or-prefix> [--all]` | One session in detail: overview (including API requests, input/output tokens and cache hit ratio), tool calls, errors, timeline. |
 | `agentlens cache [session] [--brief] [--requests]` | Cache coach report: hit ratio, misses, causes with evidence, and fixes. |
-| `agentlens` / `agentlens dashboard [--auto-open on\|off]` | Opens the terminal dashboard (needs the `tui` extra). Without a terminal, prints help. `--auto-open on` (macOS) opens it in a new Terminal window whenever a Claude Code session starts. |
+| `agentlens` / `agentlens dashboard [--window] [--auto-open on\|off]` | Opens the terminal dashboard (needs the `tui` extra). Without a terminal, prints help. `--window` (macOS) opens it in a new Terminal window now; `--auto-open on` does that whenever a Claude Code session starts. |
+| `/agentlens-dashboard` (in Claude Code) | Opens the dashboard in a new Terminal window (plugin, macOS). |
 | `agentlens ingest` | Moves spooled events into the database. Runs automatically before every read. |
 
 ## Where the numbers come from

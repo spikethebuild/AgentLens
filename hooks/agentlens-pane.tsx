@@ -1,6 +1,8 @@
-// AgentLens pane for Claude Code: `/agentlens` opens or closes a live panel
-// beside the conversation with this session's tokens, cache, plan usage,
-// failures and recent events.
+// AgentLens pane for Claude Code: a live panel beside the conversation with this
+// session's tokens, cache, plan usage, failures and recent events. It opens by
+// itself in interactive sessions (plugin option `autoOpenPane`, on by default);
+// `/agentlens` opens or closes it. `/agentlens-dashboard` opens the full
+// dashboard in a Terminal window, only when asked.
 //
 // Read-only and local: it runs `agentlens pane-data` (the plugin's own CLI,
 // through hooks/run.sh) and reads Claude Code's own usage figures. It makes no
@@ -14,6 +16,7 @@ import type { PaneData, PaneView, PlanWindow } from '../types'
 
 const PANE = 'agentlens'
 const COMMAND = 'agentlens'
+const DASHBOARD_COMMAND = 'agentlens-dashboard'
 const REFRESH_MS = 3000
 const RUN_TIMEOUT_MS = 15000
 
@@ -28,6 +31,9 @@ const ROSE = '#f5a3b5'
 const EMPTY: PaneView = { data: null, error: null, live: [], contextPercent: null, refreshedAt: null }
 // Change the tag when PaneView's fields change: it declines what an earlier version stored.
 const view = atom({ plugin: 'agentlens', key: 'view' } as const, EMPTY, { shape: 'view-1' })
+const dismissed = atom({ plugin: 'agentlens', key: 'dismissed' } as const, false, { shape: 'dismissed-1' })
+
+type Options = { autoOpenPane?: boolean }
 
 // ---------------------------------------------------------------- formatting
 
@@ -120,29 +126,66 @@ async function isOpen($: EngineInterface): Promise<boolean> {
   return (await $.ui.panes()).some((pane: { id: string }) => pane.id === PANE)
 }
 
+function startTimer($: EngineInterface): void {
+  stopTimer()
+  timer = $.clock.every(REFRESH_MS, () => void refresh($))
+}
+
+async function openPane($: EngineInterface): Promise<boolean> {
+  const opened = await $.ui.open({ id: PANE, title: 'AgentLens' })
+  await refresh($)
+  startTimer($)
+  return opened.isPlaced
+}
+
+/** Session start (and every reload): reopen or keep the pane, unless the person closed it. */
+async function onStart($: EngineInterface, autoOpen: boolean): Promise<void> {
+  if (await isOpen($)) {
+    await refresh($)
+    startTimer($) // a reload drops the module's timer; the pane itself stays
+    return
+  }
+  if (autoOpen && !(await read($, dismissed))) await openPane($)
+}
+
+async function openDashboard($: EngineInterface): Promise<string> {
+  const ran = await $.process.run(
+    ['sh', `${$.plugin.root}/hooks/run.sh`, 'dashboard', '--window'],
+    { timeoutMs: RUN_TIMEOUT_MS },
+  )
+  const text = String(ran.stdout ?? '').trim().split('\n')[0]
+  return text || `agentlens exited ${ran.exitCode}`
+}
+
 // ---------------------------------------------------------------- hooks
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  const autoOpen = (options as Options | undefined)?.autoOpenPane !== false
+
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: COMMAND,
       description: 'Open or close the AgentLens pane: tokens, cache, plan usage and failures (local, no tokens)',
       immediate: true,
     })
+    await $.command.register({
+      name: DASHBOARD_COMMAND,
+      description: 'Open the full AgentLens dashboard in a Terminal window (macOS, local, no tokens)',
+      immediate: true,
+    })
+    if (e.isInteractive) await onStart($, autoOpen)
     return next(e)
-  })
+  }).catch(($, e, next) => (next.called ? undefined : next(e))) // never hold up a session start
 
   on('command.run', { command: COMMAND }, async $ => {
     if (await isOpen($)) {
       await $.ui.close({ id: PANE })
-      return { text: 'AgentLens pane closed.' }
+      return { text: 'AgentLens pane closed. Run /agentlens to open it again.' }
     }
-    const opened = await $.ui.open({ id: PANE, title: 'AgentLens' })
-    await refresh($)
-    stopTimer()
-    timer = $.clock.every(REFRESH_MS, () => void refresh($))
+    await update($, dismissed, () => false)
+    const placed = await openPane($)
     return {
-      text: opened.isPlaced
+      text: placed
         ? 'AgentLens pane opened. Run /agentlens again to close it.'
         : 'AgentLens pane opened; it shows when the terminal has room.',
     }
@@ -151,8 +194,16 @@ export const register: Register = on => {
     return { text: 'The AgentLens pane hit an error. Run `agentlens doctor` in a terminal.' }
   })
 
+  on('command.run', { command: DASHBOARD_COMMAND }, async $ => ({ text: await openDashboard($) }))
+    .catch(() => ({ text: 'Could not open the dashboard. Run `agentlens dashboard` in a terminal.' }))
+
   on('ui.close', { id: PANE }, async ($, e, next) => {
     stopTimer()
+    try {
+      await update($, dismissed, () => true) // closed: stay closed for this session, even across a reload
+    } catch {
+      // Closing must never fail because of AgentLens (e.g. the session is already ending).
+    }
     return next(e)
   }).catch(($, e, next) => {
     stopTimer()

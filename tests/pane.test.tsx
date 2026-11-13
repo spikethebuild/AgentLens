@@ -63,9 +63,11 @@ function engine(on: any, opts: { stdout?: string; live?: boolean; panes?: string
   return { ran, panes: () => panes }
 }
 
+const MANUAL = { options: { autoOpenPane: false } }
+
 const run = ($: any) => $.command.run({ command: 'agentlens', args: '', origin: { kind: 'composer' } })
 
-test('/agentlens opens the pane and shows tokens, plan usage and failures', async ($, on) => {
+test('/agentlens opens the pane and shows tokens, plan usage and failures', MANUAL, async ($, on) => {
   const eng = engine(on)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   const result = await run($)
@@ -85,7 +87,7 @@ test('/agentlens opens the pane and shows tokens, plan usage and failures', asyn
   }
 })
 
-test('live plan usage from Claude Code is preferred over the snapshot', async ($, on) => {
+test('live plan usage from Claude Code is preferred over the snapshot', MANUAL, async ($, on) => {
   engine(on, { live: true })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await run($)
@@ -95,17 +97,17 @@ test('live plan usage from Claude Code is preferred over the snapshot', async ($
   await ui.unmount()
 })
 
-test('a second /agentlens closes the pane', async ($, on) => {
+test('a second /agentlens closes the pane', MANUAL, async ($, on) => {
   const eng = engine(on)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await run($)
   expect(eng.panes()).toEqual(['agentlens'])
   const result = await run($)
-  expect(result.text).toBe('AgentLens pane closed.')
+  expect(result.text).toContain('AgentLens pane closed.')
   expect(eng.panes()).toEqual([])
 })
 
-test('a failing agentlens command shows its reason, not a blank pane', async ($, on) => {
+test('a failing agentlens command shows its reason, not a blank pane', MANUAL, async ($, on) => {
   engine(on, { stdout: 'AgentLens: Python 3.10+ not found. Install it or set AGENTLENS_PYTHON.' })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await run($)
@@ -113,4 +115,55 @@ test('a failing agentlens command shows its reason, not a blank pane', async ($,
   expect((await ui.find({ type: 'Text', text: /Python 3\.10\+ not found/ }))?.text).toContain('!')
   expect((await ui.find({ type: 'Text', text: /no usage recorded yet|unavailable/ }))).toBeTruthy()
   await ui.unmount()
+})
+
+const START = { cwd: '/', surface: 'terminal', isInteractive: true } as const
+
+// A pane left open is drawn after the test ends; close it so nothing outlives the test.
+const closePane = ($: any) => run($) // /agentlens toggles the open pane shut
+
+test('the pane opens by itself in an interactive session', async ($, on) => {
+  const eng = engine(on)
+  await $.session.start(START)
+  expect(eng.panes()).toEqual(['agentlens'])
+  expect(eng.ran.some(argv => argv.includes('pane-data'))).toBe(true)
+  await closePane($)
+})
+
+test('no pane for a -p run or the SDK', async ($, on) => {
+  const eng = engine(on)
+  await $.session.start({ cwd: '/', surface: null, isInteractive: false })
+  expect(eng.panes()).toEqual([])
+})
+
+test('autoOpenPane off: only /agentlens opens it', MANUAL, async ($, on) => {
+  const eng = engine(on)
+  await $.session.start(START)
+  expect(eng.panes()).toEqual([])
+  await run($)
+  expect(eng.panes()).toEqual(['agentlens'])
+  await closePane($)
+})
+
+test('a pane the person closed stays closed when session.start runs again (reload)', async ($, on) => {
+  const eng = engine(on)
+  await $.session.start(START)
+  await run($) // closes it
+  expect(eng.panes()).toEqual([])
+  await $.session.start(START)
+  expect(eng.panes()).toEqual([])
+  await run($) // reopening by hand clears that
+  expect(eng.panes()).toEqual(['agentlens'])
+  await closePane($)
+})
+
+test('/agentlens-dashboard opens the Terminal dashboard through the launcher', async ($, on) => {
+  const eng = engine(on, { stdout: 'Opened the AgentLens dashboard in a new Terminal window.' })
+  await $.session.start(START)
+  const result = await $.command.run({ command: 'agentlens-dashboard', args: '', origin: { kind: 'composer' } } as any)
+  expect(result.text).toBe('Opened the AgentLens dashboard in a new Terminal window.')
+  const argv = eng.ran.find(a => a.includes('--window'))
+  expect(argv?.slice(-2)).toEqual(['dashboard', '--window'])
+  expect(argv?.[1]).toMatch(/\/hooks\/run\.sh$/)
+  await closePane($)
 })

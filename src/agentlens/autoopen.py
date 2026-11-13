@@ -1,8 +1,10 @@
-"""Open the dashboard in a new Terminal window when a Claude Code session starts.
+"""Open the dashboard in a Terminal window: on request, or (opt-in) on session start.
 
-Opt-in (``agentlens dashboard --auto-open on``), macOS only. Called from the hook
-fast path on ``SessionStart`` with ``source == "startup"``; standard library only,
-never raises, never waits.
+On request: ``agentlens dashboard --window`` (the plugin's ``/agentlens-dashboard``
+command runs it), which brings the window to the front.
+Opt-in: ``agentlens dashboard --auto-open on`` opens it, in the background, when a
+new Claude Code session starts (from the hook fast path on ``SessionStart`` with
+``source == "startup"``). macOS only; standard library only; never waits.
 
 How the window is opened: a ``.command`` file in ``$AGENTLENS_HOME/run`` is handed
 to ``open -g -a Terminal``. Terminal runs it in a new window. This needs no
@@ -80,9 +82,11 @@ def enable(python: str) -> None:
     _write_config(cfg)
 
 
-def disable() -> None:
+def disable(python: str | None = None) -> None:
     cfg = _read_config()
     cfg["open_dashboard"] = False
+    if python:
+        cfg["dashboard_python"] = python
     _write_config(cfg)
 
 
@@ -156,6 +160,52 @@ def interactive_session(env: dict[str, str] | None = None) -> bool:
     return entry is None or entry == "cli"
 
 
+def dashboard_python() -> str | None:
+    """The Python that runs the dashboard: the saved one, else this one if it has the `tui` extra."""
+    _, saved = settings()
+    if saved and os.path.exists(saved):
+        return saved
+    try:
+        import importlib.util
+
+        if importlib.util.find_spec("textual") is not None:
+            return sys.executable
+    except (ImportError, ValueError):
+        pass
+    return None
+
+
+def _launch(python: str, background: bool) -> None:
+    script = write_script(python)
+    argv = ["open", "-a", "Terminal", str(script)]
+    if background:
+        argv.insert(1, "-g")
+    subprocess.Popen(
+        argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True, close_fds=True,
+    )
+
+
+def open_on_request() -> tuple[bool, str]:
+    """(opened, one-line message) for `agentlens dashboard --window`."""
+    if sys.platform != "darwin":
+        return False, "Opening the dashboard in a window is supported on macOS only; run `agentlens` in a terminal."
+    if dashboard_running():
+        return False, "The AgentLens dashboard is already open in a Terminal window."
+    python = dashboard_python()
+    if python is None:
+        return False, ("No Python with the dashboard installed was found. Install `agentlens-local[tui]` "
+                       "and run `agentlens dashboard --auto-open off` once to save it.")
+    _launch(python, background=False)
+    return True, "Opened the AgentLens dashboard in a new Terminal window."
+
+
+def remember_python(python: str) -> None:
+    cfg = _read_config()
+    cfg["dashboard_python"] = python
+    _write_config(cfg)
+
+
 def write_script(python: str) -> Path:
     home = str(paths.home())
     body = (
@@ -193,10 +243,5 @@ def maybe_open(start_source: str | None, now: float | None = None) -> str:
         return "skip: already open"
     if not _claim_launch(time.time() if now is None else now):
         return "skip: just launched"
-    script = write_script(python)
-    subprocess.Popen(
-        ["open", "-g", "-a", "Terminal", str(script)],
-        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        start_new_session=True, close_fds=True,
-    )
+    _launch(python, background=True)
     return "opened"

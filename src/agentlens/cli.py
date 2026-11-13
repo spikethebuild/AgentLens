@@ -466,14 +466,27 @@ def run_dashboard(parser: argparse.ArgumentParser | None = None) -> int:
     return tui.run()
 
 
+def _has_textual() -> bool:
+    import importlib.util
+
+    return importlib.util.find_spec("textual") is not None
+
+
 def cmd_dashboard(args) -> int:
-    if args.auto_open is None:
-        return run_dashboard()
     from agentlens import autoopen
 
+    if args.window:
+        opened, message = autoopen.open_on_request()
+        print(message)
+        return 0 if opened or autoopen.dashboard_running() else 1
+    if args.auto_open is None:
+        return run_dashboard()
     if args.auto_open == "off":
-        autoopen.disable()
-        print("The dashboard will no longer open by itself.")
+        # Remember this Python if it can run the dashboard, so `--window` (and the
+        # plugin's /agentlens-dashboard, which runs under another Python) can use it.
+        autoopen.disable(sys.executable if _has_textual() else None)
+        print("The dashboard will no longer open by itself. /agentlens-dashboard or "
+              "`agentlens dashboard --window` opens it on request.")
         return 0
     if sys.platform != "darwin":
         print("Opening the dashboard automatically is supported on macOS only.", file=sys.stderr)
@@ -567,6 +580,8 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("dashboard", help="open the terminal dashboard (same as running `agentlens` alone)")
     s.add_argument("--auto-open", choices=("on", "off"), default=None,
                    help="macOS: open the dashboard in a new Terminal window when a Claude Code session starts")
+    s.add_argument("--window", action="store_true",
+                   help="macOS: open the dashboard in a new Terminal window now (used by /agentlens-dashboard)")
     s.set_defaults(func=cmd_dashboard)
 
     s = sub.add_parser("cache", help="where prompt cache was rebuilt in a session, why, and the fix")

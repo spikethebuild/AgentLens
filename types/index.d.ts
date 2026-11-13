@@ -56,6 +56,10 @@ export type PaneView = {
 
 declare module 'claude-code' {
   interface PluginState {
-    agentlens: { view: Shaped<PaneView> }
+    agentlens: {
+      view: Shaped<PaneView>
+      /** True once the person closed the pane this session: a reload must not reopen it. */
+      dismissed: Shaped<boolean>
+    }
   }
 }

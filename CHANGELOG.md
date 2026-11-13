@@ -56,9 +56,13 @@ First public release, published to PyPI as `agentlens-local`.
 - Release docs: README quick start, troubleshooting, uninstall and a list of
   the files AgentLens keeps; `SECURITY.md` (private reporting), `CONTRIBUTING.md`,
   issue templates, and a test that every CLI command is in the README table.
-- `agentlens dashboard --auto-open on|off` (macOS, opt-in): a new Claude Code
-  session opens the dashboard in a new Terminal.app window. New sessions only,
-  one dashboard at a time, and interactive sessions only.
+- The `/agentlens` pane opens by itself in interactive sessions (plugin option
+  `autoOpenPane`, on by default). Once closed, it stays closed for that session.
+- `/agentlens-dashboard` and `agentlens dashboard --window` (macOS): open the
+  dashboard in a new Terminal.app window on request.
+- `agentlens dashboard --auto-open on|off` (macOS, opt-in, off by default): a
+  new Claude Code session also opens the dashboard in a Terminal window. New
+  sessions only, one dashboard at a time, and interactive sessions only.
 
 ### Changed
 - Version reset from the unpublished 0.3.0 to 0.1.1 to follow the milestone labels.
