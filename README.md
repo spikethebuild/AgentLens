@@ -1,5 +1,10 @@
 # AgentLens
 
+[![PyPI](https://img.shields.io/pypi/v/agentlens-local)](https://pypi.org/project/agentlens-local/)
+[![Python](https://img.shields.io/pypi/pyversions/agentlens-local)](https://pypi.org/project/agentlens-local/)
+[![CI](https://github.com/spikethebuild/AgentLens/actions/workflows/ci.yml/badge.svg)](https://github.com/spikethebuild/AgentLens/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 **Find out where your coding agent's tokens and cache went, and how to waste less.**
 
 AgentLens is a local-first observability tool for AI coding agents. It records what Claude Code does (sessions, prompts, tool calls, failures, approvals, compactions, model switches, instruction files loaded) through Claude Code's official hooks and stores it in a local SQLite database. It makes **zero LLM calls**, never blocks the agent, and never stores file contents, prompt text or secrets.
